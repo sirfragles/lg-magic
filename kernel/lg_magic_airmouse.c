@@ -14,7 +14,7 @@
  */
 
 #include <linux/types.h>
-#include <linux/limits.h>
+#include <linux/errno.h>
 #include "lg_magic_airmouse.h"
 
 /*
@@ -68,7 +68,7 @@ static s64 ieee754_f32_to_fp(const u8 *bytes, s32 scale)
 		if (shift < 63)
 			result <<= shift;
 		else
-			return sign ? S64_MIN : S64_MAX;
+			return 0; /* overflow — shouldn't happen with calib values */
 	} else {
 		shift = -shift;
 		if (shift < 63)
