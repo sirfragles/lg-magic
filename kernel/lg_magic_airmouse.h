@@ -28,6 +28,8 @@
  */
 #define LGMAGIC_FP_SCALE 65536
 #define LGMAGIC_FP_SHIFT 16
+/* Pre-computed to avoid multiplication in hot path */
+#define LGMAGIC_FP_SCALE_SQ ((s64)LGMAGIC_FP_SCALE * LGMAGIC_FP_SCALE)
 
 /*
  * On-disk calibration format (IEEE 754 float).

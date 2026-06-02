@@ -16,6 +16,7 @@
 #include <linux/hid.h>
 #include <linux/input.h>
 #include <linux/firmware.h>
+#include <linux/compiler.h>
 
 #include "lg_magic_airmouse.h"
 
@@ -143,13 +144,13 @@ static int lgmagic_raw_event(struct hid_device *hdev,
 	s8 wheel;
 	int i;
 
-	if (!drvdata || !drvdata->input_hid || !drvdata->input_imu) {
+	if (unlikely(!drvdata || !drvdata->input_hid || !drvdata->input_imu)) {
 		lgmagic_dev_warn(&hdev->dev,
 				 "No drvdata or no input dev");
 		return 0;
 	}
 
-	if (data[0] != 0xFD) {
+	if (unlikely(data[0] != 0xFD)) {
 		/* Known non-IMU report types — log at debug only */
 		if (data[0] == 0xF9 || data[0] == 0x01) {
 			lgmagic_dev_dbg(&hdev->dev,
@@ -163,7 +164,7 @@ static int lgmagic_raw_event(struct hid_device *hdev,
 		return 0;
 	}
 
-	if (size < 20) {
+	if (unlikely(size < 20)) {
 		lgmagic_dev_dbg(&hdev->dev,
 				"Short 0xFD report: %d bytes (expected >= 20)",
 				size);
@@ -177,12 +178,17 @@ static int lgmagic_raw_event(struct hid_device *hdev,
 	/* Parse counter (little-endian) */
 	counter = data[1] | (data[2] << 8);
 
-	/* Parse 6 signed 16-bit values, big-endian */
-	for (i = 0; i < 6; i++)
-		imu[i] = (data[5 + 2 * i] << 8) | data[6 + 2 * i];
+	/*
+	 * Parse IMU data only if needed — skip the 6-element loop when
+	 * both airmouse and IMU evdev are disabled (most common case).
+	 */
+	if (airmouse || imu_evdev) {
+		for (i = 0; i < 6; i++)
+			imu[i] = (data[5 + 2 * i] << 8) | data[6 + 2 * i];
+	}
 
 	/* ── Button handling ────────────────────────────────── */
-	if (btn_code != drvdata->last_btncode) {
+	if (unlikely(btn_code != drvdata->last_btncode)) {
 		input_report_key(drvdata->input_hid, drvdata->last_keycode,
 				 0);
 		reporting = 1;

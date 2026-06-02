@@ -198,9 +198,9 @@ int lgmagic_calc_mouse(struct lg_magic_airmouse_calib_fp *calib,
 	 *    Gyro axes → mouse axes:  Z-rotation → X-mouse, X-rotation → Y-mouse
 	 */
 	mouse[0] = (s16)((gyro_acc[2] * (s64)calib->mouse_k)
-			 / ((s64)LGMAGIC_FP_SCALE * LGMAGIC_FP_SCALE));
+			 / LGMAGIC_FP_SCALE_SQ);
 	mouse[1] = (s16)((gyro_acc[0] * (s64)calib->mouse_k)
-			 / ((s64)LGMAGIC_FP_SCALE * LGMAGIC_FP_SCALE));
+			 / LGMAGIC_FP_SCALE_SQ);
 
 	/* 5. Threshold detection: switch to airmouse mode on large motion */
 	if (gyro_acc[0] > threshold_fp || gyro_acc[0] < -threshold_fp ||
