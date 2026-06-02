@@ -1,9 +1,8 @@
-import pyqtgraph as pg
-import pyqtgraph.opengl as gl
-import numpy as np
-from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 import math
-import trimesh
+
+import numpy as np
+import pyqtgraph.opengl as gl
+from pyqtgraph.Qt import QtWidgets
 
 app = QtWidgets.QApplication([])
 

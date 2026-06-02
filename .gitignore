@@ -1,4 +1,4 @@
-# Kernel module
+# Kernel module build artifacts
 *.cmd
 *.ko
 *.mod*
@@ -7,12 +7,36 @@ Module.symvers
 modules.order
 .tmp_versions/
 
-# Temorary calibration files
+# Temporary calibration files (keep committed ones in tests/)
 *.json
 *.csv
 *.bin
+!tests/**/*.json
+!tests/**/*.csv
+!tests/**/*.bin
 
 # Python artifacts
 __pycache__/
 *.py[codz]
 *$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

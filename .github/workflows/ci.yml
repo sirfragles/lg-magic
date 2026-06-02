@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [master, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [master, develop]
+
+jobs:
+  # ── Python: lint + type-check ──────────────────────────────────────
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check scripts/ tests/
+
+      - name: Ruff format check
+        run: ruff format --check scripts/ tests/
+
+  # ── Python: unit tests ─────────────────────────────────────────────
+  python-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short --color=yes
+
+  # ── Kernel module: build against host kernel ───────────────────────
+  kernel-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Build on different Ubuntu versions which ship different kernels
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kernel headers & build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y linux-headers-$(uname -r) build-essential
+
+      - name: Build kernel module
+        run: |
+          cd kernel
+          make KVER=$(uname -r)
+
+  # ── Kernel module: coding-style check ──────────────────────────────
+  kernel-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for floating point in kernel code
+        run: |
+          echo "=== Checking for float usage in kernel code ==="
+          if grep -n -E '\bfloat\b' kernel/*.c kernel/*.h; then
+            echo "WARNING: Floating-point found in kernel code."
+            echo "This is allowed only with kernel_fpu_begin/end guards."
+            echo "Prefer fixed-point integer math."
+          else
+            echo "OK: No float usage detected."
+          fi
+
+      - name: Check for missing SPDX license tags
+        run: |
+          echo "=== Checking for license headers ==="
+          for f in kernel/*.c kernel/*.h; do
+            if ! grep -q 'SPDX-License-Identifier\|GNU General Public License' "$f"; then
+              echo "WARNING: $f missing license header"
+            fi
+          done
+
+      - name: Basic kernel style checks
+        run: |
+          echo "=== Checking for tabs vs spaces ==="
+          # Kernel uses tabs for indentation
+          for f in kernel/*.c kernel/*.h; do
+            if grep -Pq '^  +[^ *]' "$f" 2>/dev/null; then
+              echo "WARNING: $f may have space indentation (use tabs)"
+            fi
+          done
+          echo "=== Checking line lengths ==="
+          for f in kernel/*.c kernel/*.h; do
+            awk 'length > 120 { print FILENAME":"NR": line too long ("length" chars)" }' "$f"
+          done
+
+  # ── Integration: full pipeline (build + test together) ─────────────
+  integration:
+    needs: [python-lint, python-test, kernel-build, kernel-lint]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies & run integration test
+        run: |
+          pip install -r requirements-dev.txt
+          bash tests/integration/calib_roundtrip.sh
+
+  # ── Release: build artifacts on tag ────────────────────────────────
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [integration]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package source
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          tar -czf lg-magic-${VERSION}.tar.gz \
+            --exclude='.git' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            kernel/ scripts/ tests/ README.md README.ru.md COPYING 51-lgimu.rules
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: lg-magic-*.tar.gz
+          generate_release_notes: true

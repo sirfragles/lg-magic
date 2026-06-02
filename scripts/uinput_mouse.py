@@ -1,6 +1,6 @@
-import uinput
-import time
+
 import numpy as np
+import uinput
 
 # -----------------------------
 # Create virtual mouse device
@@ -32,7 +32,7 @@ prev_pitch, prev_yaw = None, None
 def imu_to_mouse_from_euler(euler, dt, s_x=50.0, s_y=50.0):
     global prev_pitch, prev_yaw
 
-    roll, pitch, yaw = euler
+    _roll, pitch, yaw = euler
 
     if prev_pitch is None:
         prev_pitch, prev_yaw = pitch, yaw

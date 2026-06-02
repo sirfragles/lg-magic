@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-import evdev
-from evdev import InputDevice, ecodes
-import numpy as np
-import json
-import csv
 import argparse
+import csv
+import json
 import math
 import threading
 
-
 import draw_cube
+import evdev
+import numpy as np
 import uinput_mouse
-
-from ahrs.filters import Madgwick
 from ahrs.common.orientation import q2euler
+from ahrs.filters import Madgwick
+from evdev import InputDevice, ecodes
 
 MODULO = 2**16
 COUNTS_PER_0p02 = 256

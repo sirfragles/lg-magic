@@ -5,6 +5,7 @@ import json
 import struct
 import sys
 
+
 def main():
     parser = argparse.ArgumentParser(description="Convert JSON calibration file to calibration blob.")
     parser.add_argument("json_file", help="Path to input JSON file")

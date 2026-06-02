@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 import struct
 
 HIDRAW_DEVICE = "/dev/hidraw7"
@@ -43,16 +42,16 @@ BUTTON_CODES = {
     0x805D: "STREAMING",
     0x800B: "INPUT",
     0x8098: "STB MENU",
-    
-    
+
+
     #0x8000: "CH+",
     0x8001: "CH-",
-    
+
     0x8072: "RED",
     0x8071: "GREEN",
     0x8063: "YELLOW",
     0x8061: "BLUE",
-    
+
     0x8081: "MOVIES",
     0x80B0: "PLAY",
     0x80BA: "PAUSE",
@@ -72,9 +71,9 @@ def parse_fd(data):
     btn_bytes = data[-3:-1]  # last two bytes before wheel
     wheel = int.from_bytes([data[-1]], signed=True)
     wheel_pos += wheel
-    
+
     btn_code = int.from_bytes(btn_bytes)
-    
+
     name = BUTTON_CODES.get(btn_code, f"UNKNOWN_{btn_code:04X}")
     print(f"Button: {name} ({btn_code})  Wheel={wheel}")
     print(f"[0xFD] Buttons raw: {data.hex()}")
@@ -85,7 +84,7 @@ def parse_fd(data):
 
     points_of_interest = [int.from_bytes(data[i:i+2], 'big', signed=True)
                           for i in range(5, 17, 2)]
-    
+
     # Print neatly
     print(f"{'Counter':>8}  {'Const':>6}  {'POI1':>6}  {'POI2':>6}  {'POI3':>6}  {'ACCEL_X':>6}  {'ACCEL_Y':>6}  {'ACCEL_Z':>6}")
     print(f"{counter:8}  {hex(const_fd00):>6}  " +

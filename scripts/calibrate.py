@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-import numpy as np
+import argparse
 import csv
 import json
-import argparse
+import sys
+
+import numpy as np
+
 
 # -----------------------------
 # Load samples CSV
@@ -22,7 +25,13 @@ def load_imu_csv(filename):
                 continue  # skip invalid lines
     return np.array(a), np.array(g)
 
-def save_calibration_json(bias=[], matrix=[], gyro_bias=[0,0,0], filename):
+def save_calibration_json(filename, bias=None, matrix=None, gyro_bias=None):
+    if bias is None:
+        bias = []
+    if matrix is None:
+        matrix = []
+    if gyro_bias is None:
+        gyro_bias = [0.0, 0.0, 0.0]
     bias_list = [float(f"{v:.6f}") for v in bias]
     matrix_list = [[float(f"{v:.6f}") for v in row] for row in matrix]
     calib_dict = {
@@ -30,9 +39,8 @@ def save_calibration_json(bias=[], matrix=[], gyro_bias=[0,0,0], filename):
         "bias": bias_list,
         "matrix": matrix_list
         },
-        # Default values
         "gyro" : {
-            "bias" : gyro_bias,
+            "bias" : [float(f"{v:.6f}") for v in gyro_bias],
             "scale" : [1,1,1]
         }
     }
@@ -92,7 +100,7 @@ def main():
         accel_samples, gyro_samples = load_imu_csv(args.csv_file)
         if args.accel:
             b_calib, M_calib = calibrate_accel(accel_samples)
-            save_calibration_json(b_calib, M_calib, filename=args.output_file)
+            save_calibration_json(bias=b_calib, matrix=M_calib, filename=args.output_file)
         elif args.gyro:
             g_bias = calibrate_gyro_bias(gyro_samples)
             save_calibration_json(gyro_bias=g_bias, filename=args.output_file)

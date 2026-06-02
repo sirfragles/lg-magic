@@ -1,0 +1,7 @@
+numpy>=1.21.0
+scipy>=1.7.0
+pyqtgraph>=0.13.0
+evdev>=1.6.0; sys_platform == 'linux'
+AHRS>=0.2.0
+python-uinput>=1.0.0; sys_platform == 'linux'
+trimesh>=4.0.0
