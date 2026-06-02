@@ -167,31 +167,37 @@ Each milestone is self-contained and produces a releasable state. The milestones
 
 ---
 
-## Milestone 5: Documentation & DX 📚
+## Milestone 5: Documentation & DX ✅ (DONE — 2026-06-02)
 
 **Goal**: Great developer and user experience.
 
-### 5.1 Architecture diagram
-- Add ASCII art or SVG architecture diagram to README
-- Show data flow from Bluetooth → HID → kernel → evdev → userspace
+### 5.1 Architecture diagram ✅
+- **File**: `README.md`
+- **Change**: Added ASCII art architecture diagram showing data flow from Bluetooth → HID subsystem → kernel module (2 evdev outputs) → Python tools, plus calibration pipeline and file tree
 
-### 5.2 Calibration guide with screenshots
-- Step-by-step screenshots of calibration workflow
-- Common pitfalls: "For accel calibration, rotate slowly through 6 orientations"
-- Show example output after successful calibration
+### 5.2 Calibration guide ✅
+- **File**: `README.md`
+- **Change**: All calibration parameters now documented with recommended values: alpha=0.2, mouse_k=0.5, gyro_scale≈0.07; clarified two-step workflow with auto-merge
 
-### 5.3 Troubleshooting section
-- "IMU device not found" → enable `imu_evdev=1`
-- "Airmouse not working" → check calibration loaded, verify with debug=2
-- "Buttons not recognized" → run `lg_magic.py` to see raw codes, add mapping
+### 5.3 Troubleshooting section ✅
+- **File**: `README.md`
+- **Change**: 7 common issues with diagnostic commands and solutions:
+  - "No IMU evdev device found" → enable imu_evdev
+  - "Airmouse not working" → 5-step diagnostic flow
+  - "Buttons not recognized" → use lg_magic.py to discover codes
+  - "Unknown descriptor" warnings → expected, debug-level only
+  - Module build failures
+  - Suspend/reconnect issues
+  - Calibration validation failures
 
-### 5.4 CONTRIBUTING.md
-- [x] Already created as part of M0
-- Keep updated as conventions evolve
+### 5.4 CONTRIBUTING.md ✅
+- Already created as part of M0; kept updated
 
-### 5.5 CHANGELOG.md
-- Start tracking changes from v1.0.0
-- Keep it updated per milestone
+### 5.5 CHANGELOG.md ✅
+- **File**: `CHANGELOG.md`
+- **Change**: Documented v1.0.0 initial release features and all unreleased v2.0.0 changes (Added/Changed/Fixed sections)
+
+**Commit**: `dd918a0`
 
 ---
 
@@ -263,7 +269,7 @@ git push origin v2.0.0
 | M2: Python Tool Fixes | ✅ Done | 2026-06-02 |
 | M3: Kernel Robustness | ✅ Done | 2026-06-02 |
 | M4: Testing & Quality | ✅ Done | 2026-06-02 |
-| M5: Documentation & DX | ⬜ Open | — |
+| M5: Documentation & DX | ✅ Done | 2026-06-02 |
 | M6: Release v2.0.0 | ⬜ Open | — |
 | M7: Future | ⬜ Open | — |
 
