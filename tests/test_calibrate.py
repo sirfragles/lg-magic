@@ -18,10 +18,7 @@ class TestLoadIMUCSV:
 
     def test_basic_csv(self):
         """Parse a well-formed CSV file."""
-        csv_content = (
-            "0,0.02,100,200,300,10,20,30\n"
-            "1,0.02,110,210,310,15,25,35\n"
-        )
+        csv_content = "0,0.02,100,200,300,10,20,30\n1,0.02,110,210,310,15,25,35\n"
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             f.write(csv_content)
             f.flush()
@@ -48,9 +45,7 @@ class TestLoadIMUCSV:
     def test_invalid_lines_skipped(self):
         """Lines with non-numeric values are skipped."""
         csv_content = (
-            "0,0.02,100,200,300,10,20,30\n"
-            "bad,line,here,x,y,z,a,b\n"
-            "1,0.02,110,210,310,15,25,35\n"
+            "0,0.02,100,200,300,10,20,30\nbad,line,here,x,y,z,a,b\n1,0.02,110,210,310,15,25,35\n"
         )
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             f.write(csv_content)
@@ -106,11 +101,16 @@ class TestAccelCalibration:
         bias_true = np.array([100.0, -50.0, 200.0])
         g = 9.80665
         # 6 directions, each measured 10 times
-        directions = np.array([
-            [g, 0, 0], [-g, 0, 0],
-            [0, g, 0], [0, -g, 0],
-            [0, 0, g], [0, 0, -g],
-        ])
+        directions = np.array(
+            [
+                [g, 0, 0],
+                [-g, 0, 0],
+                [0, g, 0],
+                [0, -g, 0],
+                [0, 0, g],
+                [0, 0, -g],
+            ]
+        )
         samples = np.vstack([bias_true + d for d in directions for _ in range(10)])
 
         b_calib, M_calib = calibrate.calibrate_accel(samples)

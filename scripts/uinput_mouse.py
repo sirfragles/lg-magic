@@ -1,15 +1,9 @@
-
 import numpy as np
 import uinput
 
 # -----------------------------
 # Create virtual mouse device
-device = uinput.Device([
-    uinput.REL_X,
-    uinput.REL_Y,
-    uinput.BTN_LEFT,
-    uinput.BTN_RIGHT
-])
+device = uinput.Device([uinput.REL_X, uinput.REL_Y, uinput.BTN_LEFT, uinput.BTN_RIGHT])
 
 
 def imu_to_mouse_from_rads(d_y, d_p, s_x=50.0, s_y=50.0):
@@ -18,7 +12,7 @@ def imu_to_mouse_from_rads(d_y, d_p, s_x=50.0, s_y=50.0):
     rel_y = int(d_p * s_y)
 
     print(f"REL_X : {rel_x} REL_Y: {rel_y}")
-    #return
+    # return
 
     # Send to uinput
     device.emit(uinput.REL_X, rel_x, syn=False)
@@ -28,6 +22,7 @@ def imu_to_mouse_from_rads(d_y, d_p, s_x=50.0, s_y=50.0):
 prev_pitch, prev_yaw = None, None
 
 # 20deg/s - 10 pix, threshold 5deg/s, 2pix
+
 
 def imu_to_mouse_from_euler(euler, dt, s_x=50.0, s_y=50.0):
     global prev_pitch, prev_yaw
@@ -39,14 +34,14 @@ def imu_to_mouse_from_euler(euler, dt, s_x=50.0, s_y=50.0):
         return  # first frame
 
     # Relative angular velocity (radians per frame)
-    delta_yaw   = yaw   - prev_yaw
+    delta_yaw = yaw - prev_yaw
     delta_pitch = pitch - prev_pitch
 
     prev_pitch, prev_yaw = pitch, yaw
 
     # Wrap around -pi..pi
-    delta_yaw   = (delta_yaw + np.pi) % (2*np.pi) - np.pi
-    delta_pitch = (delta_pitch + np.pi) % (2*np.pi) - np.pi
+    delta_yaw = (delta_yaw + np.pi) % (2 * np.pi) - np.pi
+    delta_pitch = (delta_pitch + np.pi) % (2 * np.pi) - np.pi
 
     delta_yaw /= dt
     delta_pitch /= dt

@@ -39,8 +39,8 @@ class TestBinaryPacking:
             "3f3fff",
             *map(float, gyro["bias"]),
             *map(float, gyro["scale"]),
-            0.2,   # alpha
-            0.5,   # mouse_k
+            0.2,  # alpha
+            0.5,  # mouse_k
         )
         with open(bin_path, "wb") as bf:
             bf.write(packed)
@@ -55,8 +55,8 @@ class TestBinaryPacking:
         assert unpacked[0] == pytest.approx(0.5)
         assert unpacked[1] == pytest.approx(-1.2)
         assert unpacked[2] == pytest.approx(3.4)
-        assert unpacked[6] == pytest.approx(0.2)   # alpha
-        assert unpacked[7] == pytest.approx(0.5)   # mouse_k
+        assert unpacked[6] == pytest.approx(0.2)  # alpha
+        assert unpacked[7] == pytest.approx(0.5)  # mouse_k
 
         Path(json_path).unlink()
         Path(bin_path).unlink()

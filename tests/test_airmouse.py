@@ -4,7 +4,6 @@ These tests verify the calibration validation and airmouse math by
 reimplementing the logic in Python (for testability without a kernel build).
 """
 
-
 import pytest
 
 # ── Reimplementation of kernel logic for testing ────────────────────
@@ -40,8 +39,8 @@ def calc_mouse(gyro_bias, gyro_scale, alpha, mouse_k, gyro_acc, threshold, gyro)
         gyro_corr = (float(gyro[i]) - gyro_bias[i]) * gyro_scale[i]
         gyro_acc[i] = alpha * gyro_corr + (1.0 - alpha) * gyro_acc[i]
 
-    mouse_x = int(gyro_acc[2] * mouse_k)   # gyro Z → mouse X
-    mouse_y = int(gyro_acc[0] * mouse_k)   # gyro X → mouse Y
+    mouse_x = int(gyro_acc[2] * mouse_k)  # gyro Z → mouse X
+    mouse_y = int(gyro_acc[0] * mouse_k)  # gyro X → mouse Y
 
     bigmove = 0
     if fabs(gyro_acc[0]) > threshold or fabs(gyro_acc[2]) > threshold:
@@ -51,6 +50,7 @@ def calc_mouse(gyro_bias, gyro_scale, alpha, mouse_k, gyro_acc, threshold, gyro)
 
 
 # ── Tests ───────────────────────────────────────────────────────────
+
 
 class TestValidateCalib:
     """Calibration validation tests."""
@@ -93,13 +93,13 @@ class TestCalcMouse:
         """Zero gyro input → zero mouse output."""
         gyro_acc = [0.0, 0.0, 0.0]
         mx, my, big = calc_mouse(
-            [0.0, 0.0, 0.0],    # bias
-            [1.0, 1.0, 1.0],    # scale
-            0.2,                 # alpha
-            0.5,                 # mouse_k
+            [0.0, 0.0, 0.0],  # bias
+            [1.0, 1.0, 1.0],  # scale
+            0.2,  # alpha
+            0.5,  # mouse_k
             gyro_acc,
-            300,                 # threshold
-            [0, 0, 0, 0, 0, 0], # gyro raw (6 values, only first 3 used)
+            300,  # threshold
+            [0, 0, 0, 0, 0, 0],  # gyro raw (6 values, only first 3 used)
         )
         assert mx == 0
         assert my == 0
@@ -136,7 +136,7 @@ class TestCalcMouse:
         _, _, big = calc_mouse(
             [0.0, 0.0, 0.0],
             [1.0, 1.0, 1.0],
-            1.0,    # alpha=1 → no filtering
+            1.0,  # alpha=1 → no filtering
             0.5,
             gyro_acc,
             300,
@@ -164,15 +164,15 @@ class TestCalcMouse:
         # gyro X = 100, bias X = 50 → corrected = 50 → scale 0.02 → 1.0
         # LPF alpha=1.0 → acc = 1.0 → mouse = 1.0 * 0.5 = 0
         mx, my, _ = calc_mouse(
-            [50.0, 0.0, 0.0],   # bias
-            [0.02, 0.02, 0.02], # scale
-            1.0,                 # alpha
-            0.5,                 # mouse_k
+            [50.0, 0.0, 0.0],  # bias
+            [0.02, 0.02, 0.02],  # scale
+            1.0,  # alpha
+            0.5,  # mouse_k
             gyro_acc,
             300,
             [100, 0, 0, 0, 0, 0],
         )
-        assert mx == 0   # gyro Z = 0 → no X mouse movement
+        assert mx == 0  # gyro Z = 0 → no X mouse movement
         # my = gyro_acc[0] * mouse_k = (100-50)*0.02 * 0.5 = 0.5 → int=0
         assert my == 0
 

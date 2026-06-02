@@ -7,7 +7,9 @@ import sys
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Convert JSON calibration file to calibration blob.")
+    parser = argparse.ArgumentParser(
+        description="Convert JSON calibration file to calibration blob."
+    )
     parser.add_argument("json_file", help="Path to input JSON file")
     parser.add_argument("output_file", help="Path to output binary file")
     parser.add_argument("--alpha", type=float, required=True, help="Alpha filter coefficiant")
@@ -38,7 +40,7 @@ def main():
             *map(float, bias),
             *map(float, scale),
             args.alpha,
-            args.mouse_k
+            args.mouse_k,
         )
     except struct.error as e:
         print(f"Struct packing error: {e}")
@@ -49,6 +51,7 @@ def main():
         bf.write(packed_data)
 
     print(f"Saved struct to {args.output_file}")
+
 
 if __name__ == "__main__":
     main()
