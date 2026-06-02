@@ -6,7 +6,7 @@ KDIR ?= /lib/modules/$(KVER)/build
 KVER ?= $(shell uname -r)
 PWD  := $(shell pwd)
 
-CFLAGS_lg_magic_airmouse.o += $(CC_FLAGS_FPU)
+# No CFLAGS_FPU needed — all math uses fixed-point integers (no kernel FPU).
 
 all:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
