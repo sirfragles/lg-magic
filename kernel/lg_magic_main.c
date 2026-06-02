@@ -1,16 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- *  This is part of lg_magic_dkms
+ *  LG Magic Remote (MR20) — Linux HID driver
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ *  Copyright (C) 2025 Ilya Chelyadin <ilya77105@gmail.com>
  *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ *  Bluetooth HID device: vendor 0x000F, product 0x3412
+ *
+ *  Features:
+ *   - 31-button key mapping with airmouse/navigation mode switching
+ *   - Gyroscope-based airmouse (fixed-point integer math, no kernel FPU)
+ *   - Optional raw IMU evdev device (accelerometer + gyroscope)
+ *   - Calibration via Linux firmware subsystem
+ *   - Suspend/resume support
+ *   - Runtime tuning via sysfs module parameters
  */
 #include <linux/module.h>
 #include <linux/hid.h>
@@ -20,487 +22,551 @@
 
 #include "lg_magic_airmouse.h"
 
-#define LGMAGIC_DRV_VERSION "2.0"
+#define LGMAGIC_DRV_VERSION    "2.0"
+#define LGMAGIC_CODE_WHEEL     0x8044
+#define LGMAGIC_REPORT_ID      0xFD
+#define LGMAGIC_REPORT_MIN_LEN 20
+#define LGMAGIC_MAC_STRLEN     17
+
+/* ── Module parameters ────────────────────────────────────────────── */
 
 static int debug = 1;
 module_param(debug, int, 0644);
-MODULE_PARM_DESC(debug, "Debug message level (0=quiet, 1=normal, 2=verbose)");
-
-#define lgmagic_dev_dbg(dev, fmt, ...)                                     \
-	do {                                                               \
-		if (debug >= 2)                                            \
-			dev_dbg(dev, fmt, ##__VA_ARGS__);                  \
-	} while (0)
-
-#define lgmagic_dev_info(dev, fmt, ...)                                    \
-	do {                                                               \
-		if (debug >= 1)                                            \
-			dev_info(dev, fmt, ##__VA_ARGS__);                 \
-	} while (0)
-
-#define lgmagic_dev_warn(dev, fmt, ...)                                    \
-	do {                                                               \
-		if (debug >= 1)                                            \
-			dev_warn(dev, fmt, ##__VA_ARGS__);                 \
-	} while (0)
-
-#define lgmagic_dev_err(dev, fmt, ...)                                     \
-	do {                                                               \
-		dev_err(dev, fmt, ##__VA_ARGS__);                          \
-	} while (0)
+MODULE_PARM_DESC(debug, "Debug level: 0=quiet, 1=normal, 2=verbose");
 
 static int airmouse = 1;
 module_param(airmouse, int, 0644);
-MODULE_PARM_DESC(airmouse, "Report mouse events");
+MODULE_PARM_DESC(airmouse, "Enable airmouse pointer (0/1)");
 
 static int airmouse_threshold = 300;
 module_param(airmouse_threshold, int, 0644);
-MODULE_PARM_DESC(airmouse_threshold, "Airmouse enable threshold");
+MODULE_PARM_DESC(airmouse_threshold,
+		 "Gyro magnitude required to enter airmouse mode (default 300)");
 
-static int imu_evdev = 0;
+static int imu_evdev;
 module_param(imu_evdev, int, 0644);
-MODULE_PARM_DESC(imu_evdev, "Expose raw IMU");
+MODULE_PARM_DESC(imu_evdev,
+		 "Expose raw IMU as separate evdev device (0/1)");
+
+/* ── Conditional logging macros ───────────────────────────────────── */
+
+#define lgmagic_dev_dbg(dev, fmt, ...)                              \
+	do { if (debug >= 2) dev_dbg(dev, fmt, ##__VA_ARGS__); } while (0)
+
+#define lgmagic_dev_info(dev, fmt, ...)                             \
+	do { if (debug >= 1) dev_info(dev, fmt, ##__VA_ARGS__); } while (0)
+
+#define lgmagic_dev_warn(dev, fmt, ...)                             \
+	do { if (debug >= 1) dev_warn(dev, fmt, ##__VA_ARGS__); } while (0)
+
+#define lgmagic_dev_err(dev, fmt, ...)                              \
+	do { dev_err(dev, fmt, ##__VA_ARGS__); } while (0)
+
+/* ── Per-device driver state ──────────────────────────────────────── */
 
 struct lgmagic_drvdata {
-	struct input_dev *input_hid;
-	struct input_dev *input_imu;
+	struct input_dev *input_hid;       /* buttons + wheel + airmouse */
+	struct input_dev *input_imu;       /* raw accel/gyro (optional) */
 
-	u16 last_keycode;
-	u16 last_btncode;
-	s64 gyro_acc[3]; /* LPF accumulators (fixed-point, scaled by 65536) */
-	int mode;
+	u16 held_keycode;                  /* currently pressed key, 0=none */
+	u16 last_button_code;              /* HID button field from prev frame */
+	s64 gyro_filter_state[3];          /* LPF accumulators (fp-scaled) */
+	bool is_airmouse_mode;             /* true = pointer, false = nav */
 	struct lg_magic_airmouse_calib_fp calib;
 };
 
-#define LGMAGIC_CODE_WHEEL 0x8044
+/* ── Button lookup table ──────────────────────────────────────────── */
 
+/*
+ * Maps 16-bit HID button codes to Linux input keycodes.
+ * The wheel-code (0x8044) appears twice: KEY_ENTER in nav mode,
+ * BTN_LEFT in airmouse mode.  Selection is at runtime.
+ */
 static const struct {
-	u16 code;
-	u16 keycode;
-} lg_btn_map[] = {
-	/* ── Power ─────────────────────────────────────── */
-	{ 0x8000, KEY_POWER },          /* [POWER] button (top-right) */
-	{ 0x8099, KEY_SLEEP },          /* [SLEEP] secondary power */
+	u16 hid_code;
+	u16 linux_keycode;
+} button_map[] = {
+	/* Power */
+	{ 0x8000, KEY_POWER },
+	{ 0x8099, KEY_SLEEP },
 
-	/* ── Number pad ────────────────────────────────── */
-	{ 0x8010, KEY_0 }, { 0x8011, KEY_1 }, { 0x8012, KEY_2 },
-	{ 0x8013, KEY_3 }, { 0x8014, KEY_4 }, { 0x8015, KEY_5 },
-	{ 0x8016, KEY_6 }, { 0x8017, KEY_7 }, { 0x8018, KEY_8 }, { 0x8019, KEY_9 },
+	/* Number pad */
+	{ 0x8010, KEY_0 },  { 0x8011, KEY_1 },  { 0x8012, KEY_2 },
+	{ 0x8013, KEY_3 },  { 0x8014, KEY_4 },  { 0x8015, KEY_5 },
+	{ 0x8016, KEY_6 },  { 0x8017, KEY_7 },  { 0x8018, KEY_8 },
+	{ 0x8019, KEY_9 },
 
-	/* ── Center wheel/OK ───────────────────────────── */
-	{ LGMAGIC_CODE_WHEEL, KEY_ENTER }, /* [OK] center press */
-	{ LGMAGIC_CODE_WHEEL, BTN_LEFT },  /* [OK] → mouse left click (airmouse mode) */
+	/* Center OK / wheel press  (mode-dependent: ENTER or BTN_LEFT) */
+	{ LGMAGIC_CODE_WHEEL, KEY_ENTER },
+	{ LGMAGIC_CODE_WHEEL, BTN_LEFT  },
 
-	/* ── Navigation ────────────────────────────────── */
-	{ 0x8040, KEY_UP },
-	{ 0x8041, KEY_DOWN },
+	/* D-pad */
+	{ 0x8040, KEY_UP    },
+	{ 0x8041, KEY_DOWN  },
 	{ 0x8006, KEY_RIGHT },
-	{ 0x8007, KEY_LEFT },
+	{ 0x8007, KEY_LEFT  },
 
-	/* ── Volume / Audio ────────────────────────────── */
-	{ 0x8002, KEY_VOLUMEUP },        /* [VOL+] */
-	{ 0x8003, KEY_VOLUMEDOWN },      /* [VOL-] */
-	{ 0x8009, KEY_MUTE },            /* [MUTE] */
-	{ 0x808B, KEY_VOICECOMMAND },    /* [MIC] voice / Google Assistant */
+	/* Volume / audio */
+	{ 0x8002, KEY_VOLUMEUP     },
+	{ 0x8003, KEY_VOLUMEDOWN   },
+	{ 0x8009, KEY_MUTE         },
+	{ 0x808B, KEY_VOICECOMMAND },
 
-	/* ── Home / Navigation keys ────────────────────── */
-	{ 0x807C, KEY_HOME },            /* [HOME] house icon */
-	{ 0x8028, KEY_BACK },            /* [BACK] arrow */
-	{ 0x8043, KEY_SETUP },           /* [SETTINGS] gear icon */
-	{ 0x80AB, KEY_PROGRAM },         /* [GUIDE] program guide */
+	/* Home / navigation */
+	{ 0x807C, KEY_HOME          },
+	{ 0x8028, KEY_BACK          },
+	{ 0x8043, KEY_SETUP         },
+	{ 0x80AB, KEY_PROGRAM       },
 
-	/* ── Media / TV controls ───────────────────────── */
-	{ 0x8053, KEY_LIST },            /* [LIST] channel list */
-	{ 0x8045, KEY_MENU },            /* [...] more options */
-	{ 0x805D, KEY_MEDIA },           /* [IVI / Prime Video] streaming */
-	{ 0x800B, KEY_TV },              /* [TV / INPUT] source */
-	{ 0x8098, KEY_CONTEXT_MENU },    /* [STB MENU] set-top box menu */
-	{ 0x8081, KEY_VIDEO },           /* [MOVIES] */
+	/* Media / TV */
+	{ 0x8053, KEY_LIST          },
+	{ 0x8045, KEY_MENU          },
+	{ 0x805D, KEY_MEDIA         },
+	{ 0x800B, KEY_TV            },
+	{ 0x8098, KEY_CONTEXT_MENU  },
+	{ 0x8081, KEY_VIDEO         },
 
-	/* ── Channel ───────────────────────────────────── */
-	/* Note: 0x8000 KEY_CHANNELUP collides with POWER, disabled */
-	{ 0x8001, KEY_CHANNELDOWN },     /* [CH-] */
+	/* Channel  (CH+ disabled — code 0x8000 collides with POWER) */
+	{ 0x8001, KEY_CHANNELDOWN   },
 
-	/* ── Playback ──────────────────────────────────── */
-	{ 0x80B0, KEY_PLAY },            /* [▶ PLAY] */
-	{ 0x80BA, KEY_PAUSE },           /* [⏸ PAUSE] */
+	/* Playback */
+	{ 0x80B0, KEY_PLAY  },
+	{ 0x80BA, KEY_PAUSE },
 
-	/* ── Color buttons (teletext / smart TV) ───────── */
-	{ 0x8072, KEY_RED },
-	{ 0x8071, KEY_GREEN },
+	/* Color buttons */
+	{ 0x8072, KEY_RED    },
+	{ 0x8071, KEY_GREEN  },
 	{ 0x8063, KEY_YELLOW },
-	{ 0x8061, KEY_BLUE },
+	{ 0x8061, KEY_BLUE   },
 };
+
+/*
+ * Look up a HID button code in the map.
+ * Returns the Linux keycode, or 0 if not found.
+ */
+static u16 button_lookup(u16 hid_code, bool airmouse_mode)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(button_map); i++) {
+		if (button_map[i].hid_code != hid_code)
+			continue;
+
+		/* Wheel code: choose ENTER or BTN_LEFT based on mode */
+		if (hid_code == LGMAGIC_CODE_WHEEL)
+			return airmouse_mode ? BTN_LEFT : KEY_ENTER;
+
+		return button_map[i].linux_keycode;
+	}
+	return 0; /* unknown code */
+}
+
+/* ── HID report parsing ───────────────────────────────────────────── */
+
+/*
+ * Report 0xFD payload layout (20 bytes after report ID):
+ *
+ *   Offset  Size  Content            Endian
+ *   ──────────────────────────────────────
+ *    0-1     2    Packet counter       LE u16
+ *    2-3     2    Constant (0xFD00)    LE u16
+ *    4-5     2    Gyro X               BE s16
+ *    6-7     2    Gyro Y               BE s16
+ *    8-9     2    Gyro Z               BE s16
+ *   10-11    2    Accel X              BE s16
+ *   12-13    2    Accel Y              BE s16
+ *   14-15    2    Accel Z              BE s16
+ *   16-17    2    Button code          BE u16
+ *   18       1    Wheel delta          s8
+ */
+static void parse_imu_data(const u8 *data, s16 *gyro, s16 *accel)
+{
+	/*
+	 * Unrolled loop: 3 gyro values (offsets 5-10) then
+	 * 3 accel values (offsets 11-16), all big-endian s16.
+	 */
+	gyro[0]  = (data[5]  << 8) | data[6];
+	gyro[1]  = (data[7]  << 8) | data[8];
+	gyro[2]  = (data[9]  << 8) | data[10];
+	accel[0] = (data[11] << 8) | data[12];
+	accel[1] = (data[13] << 8) | data[14];
+	accel[2] = (data[15] << 8) | data[16];
+}
+
+static void report_imu_evdev(struct input_dev *idev, u16 counter,
+			     const s16 *gyro, const s16 *accel)
+{
+	input_event(idev, EV_MSC, MSC_SERIAL, counter);
+	input_report_abs(idev, ABS_X,  accel[0]);
+	input_report_abs(idev, ABS_Y,  accel[1]);
+	input_report_abs(idev, ABS_Z,  accel[2]);
+	input_report_abs(idev, ABS_RX, gyro[0]);
+	input_report_abs(idev, ABS_RY, gyro[1]);
+	input_report_abs(idev, ABS_RZ, gyro[2]);
+	input_sync(idev);
+}
+
+/* ── raw_event — main HID callback (softirq context) ──────────────── */
 
 static int lgmagic_raw_event(struct hid_device *hdev,
 			     struct hid_report *report, u8 *data, int size)
 {
-	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
-	u8 reporting = 0;
-	u16 counter;
-	s16 imu[6];
-	s16 mouse[2] = { 0 };
-	u16 btn_code;
-	s8 wheel;
-	int i;
+	struct lgmagic_drvdata *priv = hid_get_drvdata(hdev);
+	bool events_emitted = false;
+	s16 gyro[3], accel[3];
+	s16 mouse_dx, mouse_dy;
+	u16 btn_code, counter;
+	s8 wheel_delta;
+	u16 new_keycode;
 
-	if (unlikely(!drvdata || !drvdata->input_hid || !drvdata->input_imu)) {
-		lgmagic_dev_warn(&hdev->dev,
-				 "No drvdata or no input dev");
+	/* ── Guards ────────────────────────────────────────── */
+	if (unlikely(!priv || !priv->input_hid || !priv->input_imu))
 		return 0;
-	}
 
-	if (unlikely(data[0] != 0xFD)) {
-		/* Known non-IMU report types — log at debug only */
-		if (data[0] == 0xF9 || data[0] == 0x01) {
+	if (unlikely(data[0] != LGMAGIC_REPORT_ID)) {
+		if (data[0] == 0xF9 || data[0] == 0x01)
 			lgmagic_dev_dbg(&hdev->dev,
-					"Known report type 0x%02x (size %d) — ignored",
-					data[0], size);
-		} else {
+				"Report 0x%02x (size %d) — ignored",
+				data[0], size);
+		else
 			lgmagic_dev_dbg(&hdev->dev,
-					"Unknown report type 0x%02x (size %d)",
-					data[0], size);
-		}
+				"Unknown report 0x%02x (size %d)",
+				data[0], size);
 		return 0;
 	}
 
-	if (unlikely(size < 20)) {
-		lgmagic_dev_dbg(&hdev->dev,
-				"Short 0xFD report: %d bytes (expected >= 20)",
-				size);
+	if (unlikely(size < LGMAGIC_REPORT_MIN_LEN))
 		return 0;
-	}
 
-	/* Button is last two bytes before wheel */
-	btn_code = (data[17] << 8) | data[18];
-	wheel = (s8)data[19];
+	/* ── Parse fixed fields ─────────────────────────────── */
+	counter    = data[1] | (data[2] << 8);          /* LE u16 */
+	btn_code   = (data[17] << 8) | data[18];        /* BE u16 */
+	wheel_delta = (s8)data[19];
 
-	/* Parse counter (little-endian) */
-	counter = data[1] | (data[2] << 8);
+	/* ── Parse IMU (skip if neither feature needs it) ──── */
+	if (airmouse || imu_evdev)
+		parse_imu_data(data, gyro, accel);
 
-	/*
-	 * Parse IMU data only if needed — skip the 6-element loop when
-	 * both airmouse and IMU evdev are disabled (most common case).
-	 */
-	if (airmouse || imu_evdev) {
-		for (i = 0; i < 6; i++)
-			imu[i] = (data[5 + 2 * i] << 8) | data[6 + 2 * i];
-	}
+	/* ── Button state machine ──────────────────────────── */
+	if (unlikely(btn_code != priv->last_button_code)) {
+		/* Release previous key */
+		input_report_key(priv->input_hid, priv->held_keycode, 0);
+		events_emitted = true;
+		priv->held_keycode = 0;
+		priv->last_button_code = btn_code;
 
-	/* ── Button handling ────────────────────────────────── */
-	if (unlikely(btn_code != drvdata->last_btncode)) {
-		input_report_key(drvdata->input_hid, drvdata->last_keycode,
-				 0);
-		reporting = 1;
-		drvdata->last_keycode = 0;
-		drvdata->last_btncode = btn_code;
 		if (btn_code != 0) {
-			for (i = 0; i < ARRAY_SIZE(lg_btn_map); i++) {
-				if (lg_btn_map[i].code == btn_code) {
-					u16 report_keycode =
-						lg_btn_map[i].keycode;
+			new_keycode = button_lookup(btn_code,
+						    priv->is_airmouse_mode);
 
-					if (lg_btn_map[i].code ==
-						    LGMAGIC_CODE_WHEEL &&
-					    drvdata->mode)
-						report_keycode = BTN_LEFT;
-					else
-						drvdata->mode = 0;
+			/* Any non-wheel button press exits airmouse mode */
+			if (btn_code != LGMAGIC_CODE_WHEEL)
+				priv->is_airmouse_mode = false;
 
-					input_report_key(drvdata->input_hid,
-							 report_keycode, 1);
-					drvdata->last_keycode =
-						report_keycode;
-					break;
-				}
+			if (new_keycode) {
+				input_report_key(priv->input_hid,
+						 new_keycode, 1);
+				priv->held_keycode = new_keycode;
 			}
 		}
 	}
 
-	/* ── Wheel handling ─────────────────────────────────── */
-	if (wheel != 0) {
-		if (drvdata->mode) {
-			input_report_rel(drvdata->input_hid, REL_WHEEL,
-					 wheel);
-		} else {
-			input_report_key(drvdata->input_hid,
-					 wheel > 0 ? KEY_UP : KEY_DOWN, 1);
-			input_report_key(drvdata->input_hid,
-					 wheel > 0 ? KEY_UP : KEY_DOWN, 0);
-		}
-		reporting = 1;
+	/* ── Wheel ─────────────────────────────────────────── */
+	if (wheel_delta != 0) {
+		if (priv->is_airmouse_mode)
+			input_report_rel(priv->input_hid, REL_WHEEL,
+					 wheel_delta);
+		else
+			input_report_key(priv->input_hid,
+					 wheel_delta > 0 ? KEY_UP
+							 : KEY_DOWN,
+					 1);
+		if (!priv->is_airmouse_mode)
+			input_report_key(priv->input_hid,
+					 wheel_delta > 0 ? KEY_UP
+							 : KEY_DOWN,
+					 0);
+		events_emitted = true;
 	}
 
-	/* ── Airmouse (fixed-point, no kernel FPU) ────────────── */
+	/* ── Airmouse (fixed-point integer, no kernel FPU) ─── */
+	mouse_dx = 0;
+	mouse_dy = 0;
+
 	if (airmouse) {
-		int bigmove;
+		bool above_threshold;
 
-		bigmove = lgmagic_calc_mouse(&drvdata->calib,
-					     drvdata->gyro_acc,
-					     airmouse_threshold, imu,
-					     mouse);
-		if (bigmove)
-			drvdata->mode = 1;
+		above_threshold = lgmagic_calc_mouse(
+			&priv->calib, priv->gyro_filter_state,
+			airmouse_threshold, gyro, &mouse_dx, &mouse_dy);
 
-		if (drvdata->mode == 1) {
-			input_report_rel(drvdata->input_hid, REL_X,
-					 mouse[0]);
-			input_report_rel(drvdata->input_hid, REL_Y,
-					 mouse[1]);
+		if (above_threshold)
+			priv->is_airmouse_mode = true;
+
+		if (priv->is_airmouse_mode) {
+			input_report_rel(priv->input_hid, REL_X, mouse_dx);
+			input_report_rel(priv->input_hid, REL_Y, mouse_dy);
 		}
 	}
 
-	if (mouse[0] || mouse[1])
-		reporting = 1;
+	if (mouse_dx || mouse_dy)
+		events_emitted = true;
 
-	if (reporting)
-		input_sync(drvdata->input_hid);
+	if (events_emitted)
+		input_sync(priv->input_hid);
 
-	if (!imu_evdev)
-		return 0;
-
-	/* Report counter */
-	input_event(drvdata->input_imu, EV_MSC, MSC_SERIAL, counter);
-
-	/* Report IMU axes */
-	input_report_abs(drvdata->input_imu, ABS_X, imu[3]);
-	input_report_abs(drvdata->input_imu, ABS_Y, imu[4]);
-	input_report_abs(drvdata->input_imu, ABS_Z, imu[5]);
-	input_report_abs(drvdata->input_imu, ABS_RX, imu[0]);
-	input_report_abs(drvdata->input_imu, ABS_RY, imu[1]);
-	input_report_abs(drvdata->input_imu, ABS_RZ, imu[2]);
-
-	input_sync(drvdata->input_imu);
+	/* ── Raw IMU evdev (optional) ──────────────────────── */
+	if (imu_evdev)
+		report_imu_evdev(priv->input_imu, counter, gyro, accel);
 
 	return 0;
 }
 
-static void lgmagic_sanitize_mac(const char *uniq, char *out)
-{
-	size_t i;
-
-	for (i = 0; uniq[i] && i < 17; i++) {
-		if (uniq[i] == ':')
-			out[i] = '_';
-		else
-			out[i] = uniq[i];
-	}
-}
+/* ── MAC address sanitizer ────────────────────────────────────────── */
 
 /*
- * Load calibration firmware, validate it, and convert to fixed-point.
- * Returns 0 on success (calibration loaded and applied),
- * non-zero if no valid calibration found (driver operates without airmouse).
+ * Replace colons with underscores in the Bluetooth MAC string.
+ * Used to construct MAC-specific firmware filenames.
  */
-static int lgmagic_load_fw(const char *fwname, struct device *dev,
-			   struct lgmagic_drvdata *drvdata)
+static void mac_to_filename(const char *mac, char *out)
+{
+	int i;
+
+	for (i = 0; mac[i] && i < LGMAGIC_MAC_STRLEN; i++)
+		out[i] = (mac[i] == ':') ? '_' : mac[i];
+}
+
+/* ── Firmware loading ─────────────────────────────────────────────── */
+
+/*
+ * Load calibration from /lib/firmware/, validate, convert to fixed-point.
+ * Returns 0 if calibration is loaded and valid.
+ * On failure, drvdata->calib is zeroed (airmouse operates as no-op).
+ */
+static int load_calibration(const char *fw_name, struct device *dev,
+			    struct lgmagic_drvdata *priv)
 {
 	const struct firmware *fw;
-	int ret;
+	int err;
 
-	ret = request_firmware(&fw, fwname, dev);
-	if (ret != 0)
-		return ret;
+	err = request_firmware(&fw, fw_name, dev);
+	if (err)
+		return err;
 
 	if (fw->size < sizeof(struct lg_magic_airmouse_calib)) {
 		lgmagic_dev_warn(dev,
-				 "Calibration file %s too small (%zu < %zu)",
-				 fwname, fw->size,
-				 sizeof(struct lg_magic_airmouse_calib));
+			"Firmware %s too small (%zu bytes, need >= %zu)",
+			fw_name, fw->size,
+			sizeof(struct lg_magic_airmouse_calib));
 		release_firmware(fw);
 		return -EINVAL;
 	}
 
-	/* Convert raw firmware bytes → fixed-point, then validate */
-	ret = lgmagic_convert_calib_to_fp(fw->data, fw->size, &drvdata->calib);
-	if (ret != 0) {
-		lgmagic_dev_warn(dev, "Failed to convert calibration %s", fwname);
+	err = lgmagic_convert_calib_to_fp(fw->data, fw->size, &priv->calib);
+	if (err) {
+		lgmagic_dev_warn(dev, "Cannot parse firmware %s", fw_name);
 		release_firmware(fw);
-		return ret;
+		return err;
 	}
 
-	if (lgmagic_validate_calib_fp(&drvdata->calib)) {
+	/* Reject out-of-range calibration values */
+	if (lgmagic_validate_calib_fp(&priv->calib)) {
 		lgmagic_dev_warn(dev,
-				 "Calibration %s failed validation — airmouse disabled",
-				 fwname);
-		memset(&drvdata->calib, 0, sizeof(drvdata->calib));
+			"Firmware %s failed validation — airmouse disabled",
+			fw_name);
+		memset(&priv->calib, 0, sizeof(priv->calib));
 		release_firmware(fw);
 		return -EINVAL;
 	}
 
 	release_firmware(fw);
-
-	lgmagic_dev_info(dev, "Loaded calibration from %s", fwname);
+	lgmagic_dev_info(dev, "Calibration loaded: %s", fw_name);
 	return 0;
 }
+
+/*
+ * Try MAC-specific firmware first, fall back to generic.
+ * Logs a helpful message if neither is found.
+ */
+static void load_calibration_for_device(struct hid_device *hdev,
+					struct lgmagic_drvdata *priv)
+{
+	bool loaded = false;
+
+	if (strlen(hdev->uniq) == LGMAGIC_MAC_STRLEN) {
+		char mac_fw[] = "lg_magic_calib_XX_XX_XX_XX_XX_XX.bin";
+
+		mac_to_filename(hdev->uniq,
+				mac_fw + sizeof("lg_magic_calib_") - 1);
+		loaded = (load_calibration(mac_fw, &hdev->dev, priv) == 0);
+	}
+
+	if (!loaded) {
+		if (load_calibration("lg_magic_calib.bin", &hdev->dev, priv))
+			lgmagic_dev_info(&hdev->dev,
+				"No calibration found — airmouse disabled. "
+				"Place lg_magic_calib.bin in /lib/firmware/");
+	}
+}
+
+/* ── Input device registration helpers ────────────────────────────── */
+
+static int register_hid_input(struct hid_device *hdev,
+			      struct lgmagic_drvdata *priv)
+{
+	int i;
+
+	priv->input_hid = devm_input_allocate_device(&hdev->dev);
+	if (!priv->input_hid)
+		return -ENOMEM;
+
+	priv->input_hid->name = "LG Magic Remote";
+	priv->input_hid->id.bustype = hdev->bus;
+	priv->input_hid->id.vendor  = hdev->vendor;
+	priv->input_hid->id.product = hdev->product;
+
+	set_bit(EV_KEY, priv->input_hid->evbit);
+	set_bit(EV_REL, priv->input_hid->evbit);
+	set_bit(REL_WHEEL, priv->input_hid->relbit);
+	set_bit(REL_X,     priv->input_hid->relbit);
+	set_bit(REL_Y,     priv->input_hid->relbit);
+
+	for (i = 0; i < ARRAY_SIZE(button_map); i++)
+		set_bit(button_map[i].linux_keycode,
+			priv->input_hid->keybit);
+
+	return input_register_device(priv->input_hid);
+}
+
+static int register_imu_input(struct hid_device *hdev,
+			      struct lgmagic_drvdata *priv)
+{
+	int axis;
+
+	priv->input_imu = devm_input_allocate_device(&hdev->dev);
+	if (!priv->input_imu)
+		return -ENOMEM;
+
+	priv->input_imu->name = "LG Magic Remote IMU";
+	priv->input_imu->id.bustype = hdev->bus;
+	priv->input_imu->id.vendor  = hdev->vendor;
+	priv->input_imu->id.product = hdev->product;
+
+	set_bit(EV_ABS, priv->input_imu->evbit);
+	set_bit(EV_MSC, priv->input_imu->evbit);
+	set_bit(MSC_SERIAL, priv->input_imu->mscbit);
+
+	for (axis = ABS_X; axis <= ABS_RZ; axis++) {
+		set_bit(axis, priv->input_imu->absbit);
+		input_set_abs_params(priv->input_imu, axis,
+				     -32768, 32767, 4, 4);
+	}
+
+	if (!imu_evdev)
+		return 0;
+
+	return input_register_device(priv->input_imu);
+}
+
+/* ── HID driver callbacks ─────────────────────────────────────────── */
 
 static int lgmagic_probe(struct hid_device *hdev,
 			 const struct hid_device_id *id)
 {
-	int ret, i;
-	struct lgmagic_drvdata *drvdata;
-	bool calib_loaded = false;
+	struct lgmagic_drvdata *priv;
+	int err;
 
-	drvdata = devm_kzalloc(&hdev->dev, sizeof(*drvdata), GFP_KERNEL);
-	if (!drvdata)
+	priv = devm_kzalloc(&hdev->dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
 		return -ENOMEM;
 
-	hid_set_drvdata(hdev, drvdata);
+	hid_set_drvdata(hdev, priv);
 
-	ret = hid_parse(hdev);
-	if (ret)
-		return ret;
+	err = hid_parse(hdev);
+	if (err)
+		return err;
 
-	ret = hid_hw_start(hdev, HID_CONNECT_HIDRAW);
-	if (ret)
-		return ret;
+	err = hid_hw_start(hdev, HID_CONNECT_HIDRAW);
+	if (err)
+		return err;
 
-	/*
-	 * Load calibration: try MAC-address-specific firmware first,
-	 * fall back to generic.  Log if neither succeeds.
-	 */
-	if (strlen(hdev->uniq) == 17) {
-		char addr_fw_name[] =
-			"lg_magic_calib_XX_XX_XX_XX_XX_XX.bin";
+	load_calibration_for_device(hdev, priv);
 
-		lgmagic_sanitize_mac(hdev->uniq,
-				     addr_fw_name +
-					     sizeof("lg_magic_calib_") - 1);
-		if (lgmagic_load_fw(addr_fw_name, &hdev->dev, drvdata) == 0)
-			calib_loaded = true;
-	}
+	err = register_hid_input(hdev, priv);
+	if (err)
+		return err;
 
-	if (!calib_loaded) {
-		ret = lgmagic_load_fw("lg_magic_calib.bin", &hdev->dev,
-				      drvdata);
-		if (ret != 0)
-			lgmagic_dev_info(
-				&hdev->dev,
-				"No valid calibration found — airmouse disabled. "
-				"Place lg_magic_calib.bin in /lib/firmware/");
-	}
-
-	/* ── HID input device (buttons + mouse) ──────────────── */
-	drvdata->input_hid = devm_input_allocate_device(&hdev->dev);
-	if (!drvdata->input_hid)
-		return -ENOMEM;
-
-	drvdata->input_hid->name = "LG Magic Remote";
-	drvdata->input_hid->id.bustype = hdev->bus;
-	drvdata->input_hid->id.vendor = hdev->vendor;
-	drvdata->input_hid->id.product = hdev->product;
-
-	set_bit(EV_KEY, drvdata->input_hid->evbit);
-	set_bit(EV_REL, drvdata->input_hid->evbit);
-	set_bit(REL_WHEEL, drvdata->input_hid->relbit);
-	set_bit(REL_X, drvdata->input_hid->relbit);
-	set_bit(REL_Y, drvdata->input_hid->relbit);
-
-	for (i = 0; i < ARRAY_SIZE(lg_btn_map); i++)
-		set_bit(lg_btn_map[i].keycode, drvdata->input_hid->keybit);
-
-	ret = input_register_device(drvdata->input_hid);
-	if (ret)
-		return ret;
-
-	/* ── IMU input device (raw sensor data) ──────────────── */
-	drvdata->input_imu = devm_input_allocate_device(&hdev->dev);
-	if (!drvdata->input_imu)
-		return -ENOMEM;
-
-	drvdata->input_imu->name = "LG Magic Remote IMU";
-	drvdata->input_imu->id.bustype = hdev->bus;
-	drvdata->input_imu->id.vendor = hdev->vendor;
-	drvdata->input_imu->id.product = hdev->product;
-
-	set_bit(EV_ABS, drvdata->input_imu->evbit);
-	set_bit(EV_MSC, drvdata->input_imu->evbit);
-	set_bit(MSC_SERIAL, drvdata->input_imu->mscbit);
-
-	for (i = ABS_X; i <= ABS_RZ; i++) {
-		set_bit(i, drvdata->input_imu->absbit);
-		input_set_abs_params(drvdata->input_imu, i, -32768, 32767, 4,
-				     4);
-	}
-
-	if (imu_evdev) {
-		ret = input_register_device(drvdata->input_imu);
-		if (ret)
-			return ret;
-	}
+	err = register_imu_input(hdev, priv);
+	if (err)
+		return err;
 
 	return 0;
 }
 
+static void release_held_key(struct lgmagic_drvdata *priv)
+{
+	if (!priv->input_hid || !priv->held_keycode)
+		return;
+
+	input_report_key(priv->input_hid, priv->held_keycode, 0);
+	input_sync(priv->input_hid);
+	priv->held_keycode = 0;
+}
+
 static void lgmagic_remove(struct hid_device *hdev)
 {
-	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
+	struct lgmagic_drvdata *priv = hid_get_drvdata(hdev);
 
-	/* Release any held button before stopping HID */
-	if (drvdata && drvdata->input_hid) {
-		if (drvdata->last_keycode) {
-			input_report_key(drvdata->input_hid,
-					 drvdata->last_keycode, 0);
-			input_sync(drvdata->input_hid);
-		}
-		drvdata->last_keycode = 0;
-		drvdata->mode = 0;
+	if (priv) {
+		release_held_key(priv);
+		priv->is_airmouse_mode = false;
 	}
 
 	hid_hw_stop(hdev);
 }
 
-/*
- * Suspend: release held keys and reset state before system sleep.
- * The Bluetooth connection will drop; on resume the remote reconnects.
- */
 static int lgmagic_suspend(struct hid_device *hdev, pm_message_t message)
 {
-	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
+	struct lgmagic_drvdata *priv = hid_get_drvdata(hdev);
 
-	if (drvdata && drvdata->input_hid) {
-		if (drvdata->last_keycode) {
-			input_report_key(drvdata->input_hid,
-					 drvdata->last_keycode, 0);
-			input_sync(drvdata->input_hid);
-			drvdata->last_keycode = 0;
-		}
-		drvdata->mode = 0;
+	if (priv) {
+		release_held_key(priv);
+		priv->is_airmouse_mode = false;
 	}
 
 	return 0;
 }
 
-/*
- * Resume: reset gyro accumulator (stale data after reconnect) and mode.
- */
 static int lgmagic_resume(struct hid_device *hdev)
 {
-	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
+	struct lgmagic_drvdata *priv = hid_get_drvdata(hdev);
 
-	if (drvdata) {
-		memset(drvdata->gyro_acc, 0, sizeof(drvdata->gyro_acc));
-		drvdata->mode = 0;
-		drvdata->last_keycode = 0;
+	if (priv) {
+		memset(priv->gyro_filter_state, 0,
+		       sizeof(priv->gyro_filter_state));
+		priv->is_airmouse_mode = false;
+		priv->held_keycode = 0;
 	}
 
 	return 0;
 }
 
+/* ── Driver registration ──────────────────────────────────────────── */
+
 static const struct hid_device_id lgmagic_devices[] = {
-	{ HID_BLUETOOTH_DEVICE(0x000f, 0x3412) }, /* LG Magic Remote */
+	{ HID_BLUETOOTH_DEVICE(0x000f, 0x3412) },
 	{}
 };
 MODULE_DEVICE_TABLE(hid, lgmagic_devices);
 
 static struct hid_driver lgmagic_driver = {
-	.name = "lgmagic",
-	.id_table = lgmagic_devices,
+	.name      = "lgmagic",
+	.id_table  = lgmagic_devices,
 	.raw_event = lgmagic_raw_event,
-	.probe = lgmagic_probe,
-	.remove = lgmagic_remove,
-	.suspend = lgmagic_suspend,
-	.resume = lgmagic_resume,
+	.probe     = lgmagic_probe,
+	.remove    = lgmagic_remove,
+	.suspend   = lgmagic_suspend,
+	.resume    = lgmagic_resume,
 };
 
 module_hid_driver(lgmagic_driver);
