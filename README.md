@@ -94,8 +94,38 @@ echo 2 > /sys/module/lg_magic/parameters/debug
 **Parameters:**
 - `airmouse` (0/1): Enable/disable airmouse functionality
 - `airmouse_threshold` (int): Gyro threshold for enabling airmouse (default: 300)
+  Lower = easier to enter airmouse mode; higher = requires faster motion.
 - `imu_evdev` (0/1): Expose raw IMU data as separate input device
 - `debug` (0-2): Debug message level (0=quiet, 1=normal, 2=verbose)
+
+### Runtime Tuning
+
+All module parameters can be changed at runtime via sysfs without
+unloading the module. This is useful for finding the right sensitivity
+for your setup:
+
+```bash
+# Enable verbose logging to see airmouse events
+sudo sh -c 'echo 2 > /sys/module/lg_magic/parameters/debug'
+sudo dmesg -w  # watch in another terminal
+
+# Disable/enable airmouse on the fly
+sudo sh -c 'echo 0 > /sys/module/lg_magic/parameters/airmouse'
+sudo sh -c 'echo 1 > /sys/module/lg_magic/parameters/airmouse'
+
+# Tune threshold — lower = easier activation (good for desktop)
+#                      higher = less jitter (good for media center)
+sudo sh -c 'echo 150 > /sys/module/lg_magic/parameters/airmouse_threshold'
+sudo sh -c 'echo 500 > /sys/module/lg_magic/parameters/airmouse_threshold'
+
+# Enable IMU evdev for Python tools
+sudo sh -c 'echo 1 > /sys/module/lg_magic/parameters/imu_evdev'
+```
+
+**Typical tunings:**
+- **Desktop/HTPC**: `airmouse_threshold=200` — quick airmouse activation
+- **Gaming/media center**: `airmouse_threshold=400` — less accidental activation
+- **Debug/dev**: `debug=2 imu_evdev=1` — full logging + IMU exposed to Python tools
 
 ## Calibration System
 

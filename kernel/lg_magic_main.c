@@ -77,46 +77,58 @@ static const struct {
 	u16 code;
 	u16 keycode;
 } lg_btn_map[] = {
-	{ 0x8000, KEY_POWER },
-	{ 0x8099, KEY_SLEEP },
-	{ 0x8010, KEY_0 },
-	{ 0x8011, KEY_1 },
-	{ 0x8012, KEY_2 },
-	{ 0x8013, KEY_3 },
-	{ 0x8014, KEY_4 },
-	{ 0x8015, KEY_5 },
-	{ 0x8016, KEY_6 },
-	{ 0x8017, KEY_7 },
-	{ 0x8018, KEY_8 },
-	{ 0x8019, KEY_9 },
-	{ LGMAGIC_CODE_WHEEL, KEY_ENTER },
-	{ LGMAGIC_CODE_WHEEL, BTN_LEFT },
-	{ 0x8053, KEY_LIST },
-	{ 0x8045, KEY_MENU }, /* ... button */
-	{ 0x8002, KEY_VOLUMEUP },
-	{ 0x8003, KEY_VOLUMEDOWN },
-	{ 0x8009, KEY_MUTE },
-	{ 0x808B, KEY_VOICECOMMAND },
-	{ 0x807C, KEY_HOME },
-	{ 0x8043, KEY_SETUP },
-	{ 0x8028, KEY_BACK },
-	{ 0x80AB, KEY_PROGRAM },
-	{ 0x805D, KEY_MEDIA }, /* IVI */
-	{ 0x800B, KEY_TV },
-	{ 0x8098, KEY_CONTEXT_MENU }, /* STB MENU */
-	/* 0x8000 — KEY_CHANNELUP collides with POWER, disabled */
-	{ 0x8001, KEY_CHANNELDOWN },
-	{ 0x8072, KEY_RED },
-	{ 0x8071, KEY_GREEN },
-	{ 0x8063, KEY_YELLOW },
-	{ 0x8061, KEY_BLUE },
-	{ 0x8081, KEY_VIDEO }, /* MOVIES */
-	{ 0x80B0, KEY_PLAY },
-	{ 0x80BA, KEY_PAUSE },
+	/* ── Power ─────────────────────────────────────── */
+	{ 0x8000, KEY_POWER },          /* [POWER] button (top-right) */
+	{ 0x8099, KEY_SLEEP },          /* [SLEEP] secondary power */
+
+	/* ── Number pad ────────────────────────────────── */
+	{ 0x8010, KEY_0 }, { 0x8011, KEY_1 }, { 0x8012, KEY_2 },
+	{ 0x8013, KEY_3 }, { 0x8014, KEY_4 }, { 0x8015, KEY_5 },
+	{ 0x8016, KEY_6 }, { 0x8017, KEY_7 }, { 0x8018, KEY_8 }, { 0x8019, KEY_9 },
+
+	/* ── Center wheel/OK ───────────────────────────── */
+	{ LGMAGIC_CODE_WHEEL, KEY_ENTER }, /* [OK] center press */
+	{ LGMAGIC_CODE_WHEEL, BTN_LEFT },  /* [OK] → mouse left click (airmouse mode) */
+
+	/* ── Navigation ────────────────────────────────── */
 	{ 0x8040, KEY_UP },
 	{ 0x8041, KEY_DOWN },
 	{ 0x8006, KEY_RIGHT },
 	{ 0x8007, KEY_LEFT },
+
+	/* ── Volume / Audio ────────────────────────────── */
+	{ 0x8002, KEY_VOLUMEUP },        /* [VOL+] */
+	{ 0x8003, KEY_VOLUMEDOWN },      /* [VOL-] */
+	{ 0x8009, KEY_MUTE },            /* [MUTE] */
+	{ 0x808B, KEY_VOICECOMMAND },    /* [MIC] voice / Google Assistant */
+
+	/* ── Home / Navigation keys ────────────────────── */
+	{ 0x807C, KEY_HOME },            /* [HOME] house icon */
+	{ 0x8028, KEY_BACK },            /* [BACK] arrow */
+	{ 0x8043, KEY_SETUP },           /* [SETTINGS] gear icon */
+	{ 0x80AB, KEY_PROGRAM },         /* [GUIDE] program guide */
+
+	/* ── Media / TV controls ───────────────────────── */
+	{ 0x8053, KEY_LIST },            /* [LIST] channel list */
+	{ 0x8045, KEY_MENU },            /* [...] more options */
+	{ 0x805D, KEY_MEDIA },           /* [IVI / Prime Video] streaming */
+	{ 0x800B, KEY_TV },              /* [TV / INPUT] source */
+	{ 0x8098, KEY_CONTEXT_MENU },    /* [STB MENU] set-top box menu */
+	{ 0x8081, KEY_VIDEO },           /* [MOVIES] */
+
+	/* ── Channel ───────────────────────────────────── */
+	/* Note: 0x8000 KEY_CHANNELUP collides with POWER, disabled */
+	{ 0x8001, KEY_CHANNELDOWN },     /* [CH-] */
+
+	/* ── Playback ──────────────────────────────────── */
+	{ 0x80B0, KEY_PLAY },            /* [▶ PLAY] */
+	{ 0x80BA, KEY_PAUSE },           /* [⏸ PAUSE] */
+
+	/* ── Color buttons (teletext / smart TV) ───────── */
+	{ 0x8072, KEY_RED },
+	{ 0x8071, KEY_GREEN },
+	{ 0x8063, KEY_YELLOW },
+	{ 0x8061, KEY_BLUE },
 };
 
 static int lgmagic_raw_event(struct hid_device *hdev,
@@ -137,11 +149,25 @@ static int lgmagic_raw_event(struct hid_device *hdev,
 		return 0;
 	}
 
-	if (size != 20 || data[0] != 0xFD) {
-		lgmagic_dev_warn(&hdev->dev,
-				 "Unknown descriptor with size %d and type %x",
-				 size, data[0]);
-		return 0; /* Not ours */
+	if (data[0] != 0xFD) {
+		/* Known non-IMU report types — log at debug only */
+		if (data[0] == 0xF9 || data[0] == 0x01) {
+			lgmagic_dev_dbg(&hdev->dev,
+					"Known report type 0x%02x (size %d) — ignored",
+					data[0], size);
+		} else {
+			lgmagic_dev_dbg(&hdev->dev,
+					"Unknown report type 0x%02x (size %d)",
+					data[0], size);
+		}
+		return 0;
+	}
+
+	if (size < 20) {
+		lgmagic_dev_dbg(&hdev->dev,
+				"Short 0xFD report: %d bytes (expected >= 20)",
+				size);
+		return 0;
 	}
 
 	/* Button is last two bytes before wheel */
@@ -402,7 +428,57 @@ static int lgmagic_probe(struct hid_device *hdev,
 
 static void lgmagic_remove(struct hid_device *hdev)
 {
+	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
+
+	/* Release any held button before stopping HID */
+	if (drvdata && drvdata->input_hid) {
+		if (drvdata->last_keycode) {
+			input_report_key(drvdata->input_hid,
+					 drvdata->last_keycode, 0);
+			input_sync(drvdata->input_hid);
+		}
+		drvdata->last_keycode = 0;
+		drvdata->mode = 0;
+	}
+
 	hid_hw_stop(hdev);
+}
+
+/*
+ * Suspend: release held keys and reset state before system sleep.
+ * The Bluetooth connection will drop; on resume the remote reconnects.
+ */
+static int lgmagic_suspend(struct hid_device *hdev, pm_message_t message)
+{
+	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
+
+	if (drvdata && drvdata->input_hid) {
+		if (drvdata->last_keycode) {
+			input_report_key(drvdata->input_hid,
+					 drvdata->last_keycode, 0);
+			input_sync(drvdata->input_hid);
+			drvdata->last_keycode = 0;
+		}
+		drvdata->mode = 0;
+	}
+
+	return 0;
+}
+
+/*
+ * Resume: reset gyro accumulator (stale data after reconnect) and mode.
+ */
+static int lgmagic_resume(struct hid_device *hdev)
+{
+	struct lgmagic_drvdata *drvdata = hid_get_drvdata(hdev);
+
+	if (drvdata) {
+		memset(drvdata->gyro_acc, 0, sizeof(drvdata->gyro_acc));
+		drvdata->mode = 0;
+		drvdata->last_keycode = 0;
+	}
+
+	return 0;
 }
 
 static const struct hid_device_id lgmagic_devices[] = {
@@ -417,6 +493,8 @@ static struct hid_driver lgmagic_driver = {
 	.raw_event = lgmagic_raw_event,
 	.probe = lgmagic_probe,
 	.remove = lgmagic_remove,
+	.suspend = lgmagic_suspend,
+	.resume = lgmagic_resume,
 };
 
 module_hid_driver(lgmagic_driver);
