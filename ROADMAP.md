@@ -70,45 +70,39 @@ Each milestone is self-contained and produces a releasable state. The milestones
 
 ---
 
-## Milestone 2: Python Tool Fixes 🐍
+## Milestone 2: Python Tool Fixes ✅ (DONE — 2026-06-02)
 
 **Goal**: Fix bugs and design issues in Python scripts.
 
-### 2.1 Lazy initialization for uinput_mouse
+### 2.1 Lazy initialization for uinput_mouse ✅
 - **File**: `scripts/uinput_mouse.py`
-- **Change**: Move `uinput.Device(...)` into a function; add `atexit` cleanup
-- **Risk**: Low
-- **Test**: Import uinput_mouse without root — should not error
+- **Change**: `uinput.Device(...)` moved to `_get_device()` factory function; `atexit` cleanup handler added via `_cleanup()`; no side effects on import
 
-### 2.2 Lazy initialization for draw_cube
+### 2.2 Lazy initialization for draw_cube ✅
 - **File**: `scripts/draw_cube.py`
-- **Change**: Move `QApplication([])` into `start()` function; guard with `QApplication.instance()` check
-- **Risk**: Low
+- **Change**: `QApplication` and GL `view` created lazily in `_init_gl()`; `start()` guards with `QApplication.instance()`; safe to import without spawning Qt windows
 
-### 2.3 Fix Madgwick timing
+### 2.3 Fix Madgwick timing ✅
 - **File**: `scripts/display_imu.py`
-- **Change**: Uncomment `madgwick.Dt = dt`
-- **Risk**: Low
+- **Change**: Uncommented `madgwick.Dt = dt` — uses actual hardware timestamps instead of fixed 50Hz assumption
 
-### 2.4 Fix `--cube` without `--ahrs`
+### 2.4 Fix `--cube` without `--ahrs` ✅
 - **File**: `scripts/display_imu.py`
-- **Change**: Make `--cube` imply `--ahrs`, or error with helpful message
-- **Risk**: Low
+- **Change**: `--cube` now auto-enables `--ahrs` (`args.ahrs = True`); standalone `--cube` works correctly
 
-### 2.5 Auto-detect hidraw device
+### 2.5 Auto-detect hidraw device ✅
 - **File**: `scripts/lg_magic.py`
-- **Change**: Scan `/dev/hidraw*`, check name for "LG" or vendor/product via sysfs
-- **Risk**: Low
+- **Change**: Added `find_lg_remote()` — scans `/dev/hidraw*` via sysfs for vendor=0x000F product=0x3412; falls back to hardcoded `/dev/hidraw7`
 
-### 2.6 Coordinate system documentation
+### 2.6 Coordinate system documentation ✅
 - **File**: `README.md`
-- **Change**: Add diagram showing remote axes; document `R_align` transformation; explain kernel vs Python coordinate handling
-- **Risk**: Zero
+- **Change**: Added axis diagram (X=right, Y=forward, Z=down); documented `R_align` rotation; explained kernel vs Python coordinate mapping differences
 
-### 2.7 Merge calibration JSONs automatically
-- **File**: `scripts/calibrate.py` or new `scripts/merge_calib.py`
-- **Change**: Add `--combine` flag that takes two JSONs and merges; or add `--all` flag to do both accel+gyro in one run
-- **Risk**: Low
+### 2.7 Merge calibration JSONs automatically ✅
+- **File**: `scripts/calibrate.py`
+- **Change**: `save_calibration_json()` now loads existing output file and merges new sections; seamless `--gyro` → `--accel` workflow using the same output file
+
+**Commit**: `291efa3`
 
 ---
 
@@ -274,7 +268,7 @@ git push origin v2.0.0
 |-----------|--------|----------------|
 | M0: CI/CD Foundation | ✅ Done | 2026-06-02 |
 | M1: Critical Bug Fixes | ✅ Done | 2026-06-02 |
-| M2: Python Tool Fixes | ⬜ Open | — |
+| M2: Python Tool Fixes | ✅ Done | 2026-06-02 |
 | M3: Kernel Robustness | ⬜ Open | — |
 | M4: Testing & Quality | ⬜ Open | — |
 | M5: Documentation & DX | ⬜ Open | — |
