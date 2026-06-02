@@ -54,10 +54,17 @@ struct lg_magic_airmouse_calib_fp {
 };
 
 /* Validate a float-format calibration blob (on-disk). */
-int lgmagic_validate_calib(struct lg_magic_airmouse_calib *calib);
+int lgmagic_validate_calib_fp(struct lg_magic_airmouse_calib_fp *calib);
 
-/* Convert float calibration to fixed-point runtime format. */
-int lgmagic_convert_calib_to_fp(struct lg_magic_airmouse_calib *src,
+/*
+ * Convert raw firmware bytes (IEEE 754 f32 blob) to fixed-point runtime format.
+ * @fw_data: raw firmware data (32 bytes, 8 little-endian IEEE 754 floats)
+ * @fw_size: size of firmware data (must be >= 32)
+ * @dst:     output fixed-point calibration struct
+ * Returns 0 on success, -EINVAL if data too small.
+ * No C floating-point operations are used.
+ */
+int lgmagic_convert_calib_to_fp(const u8 *fw_data, size_t fw_size,
 				struct lg_magic_airmouse_calib_fp *dst);
 
 /*

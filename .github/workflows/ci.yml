@@ -80,13 +80,18 @@ jobs:
       - name: Check for floating point in kernel code
         run: |
           echo "=== Checking for float usage in kernel code ==="
-          if grep -n -E '\bfloat\b' kernel/*.c kernel/*.h; then
-            echo "WARNING: Floating-point found in kernel code."
-            echo "This is allowed only with kernel_fpu_begin/end guards."
-            echo "Prefer fixed-point integer math."
-          else
-            echo "OK: No float usage detected."
+          # Find float usage excluding comments and struct definitions
+          FLOATS=$(grep -n -E '\bfloat\b' kernel/*.c | grep -v '/\*\|\* \|//' || true)
+          if [ -n "$FLOATS" ]; then
+            echo "$FLOATS"
+            echo "ERROR: Floating-point found in kernel code (not in comments)."
+            echo "All math must use fixed-point integers. See lg_magic_airmouse.c."
+            exit 1
           fi
+          # Check header for float-only struct (the on-disk format — OK as unused)
+          HEADER_FLOATS=$(grep -c '\bfloat\b' kernel/lg_magic_airmouse.h || true)
+          echo "Header float references (struct definition + comments): $HEADER_FLOATS"
+          echo "OK: No active float usage in kernel code."
 
       - name: Check for missing SPDX license tags
         run: |

@@ -264,7 +264,6 @@ static int lgmagic_load_fw(const char *fwname, struct device *dev,
 			   struct lgmagic_drvdata *drvdata)
 {
 	const struct firmware *fw;
-	struct lg_magic_airmouse_calib fw_calib;
 	int ret;
 
 	ret = request_firmware(&fw, fwname, dev);
@@ -280,20 +279,26 @@ static int lgmagic_load_fw(const char *fwname, struct device *dev,
 		return -EINVAL;
 	}
 
-	memcpy(&fw_calib, fw->data, sizeof(fw_calib));
-	release_firmware(fw);
+	/* Convert raw firmware bytes → fixed-point, then validate */
+	ret = lgmagic_convert_calib_to_fp(fw->data, fw->size, &drvdata->calib);
+	if (ret != 0) {
+		lgmagic_dev_warn(dev, "Failed to convert calibration %s", fwname);
+		release_firmware(fw);
+		return ret;
+	}
 
-	/* Validate the float calibration before converting */
-	if (lgmagic_validate_calib(&fw_calib)) {
+	if (lgmagic_validate_calib_fp(&drvdata->calib)) {
 		lgmagic_dev_warn(dev,
 				 "Calibration %s failed validation — airmouse disabled",
 				 fwname);
 		memset(&drvdata->calib, 0, sizeof(drvdata->calib));
+		release_firmware(fw);
 		return -EINVAL;
 	}
 
+	release_firmware(fw);
+
 	lgmagic_dev_info(dev, "Loaded calibration from %s", fwname);
-	lgmagic_convert_calib_to_fp(&fw_calib, &drvdata->calib);
 	return 0;
 }
 
