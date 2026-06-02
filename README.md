@@ -9,21 +9,70 @@ This project provides a comprehensive Linux kernel driver and toolset for the LG
 
 ## Project Structure
 
-### Kernel Module Files
+```
+lg-magic/
+├── kernel/                      # Linux kernel module
+│   ├── lg_magic_main.c          # HID driver entry point
+│   ├── lg_magic_airmouse.c      # Fixed-point airmouse math (no FPU!)
+│   ├── lg_magic_airmouse.h      # Calibration structs + API
+│   ├── Makefile                 # Kbuild
+│   └── dkms.conf                # DKMS auto-build config
+├── scripts/                     # Python userspace tools
+│   ├── calibrate.py             # IMU calibration (ellipsoid fitting)
+│   ├── convert_calib.py         # JSON → binary firmware converter
+│   ├── display_imu.py           # IMU visualizer / AHRS / airmouse
+│   ├── draw_cube.py             # 3D orientation cube (PyQtGraph)
+│   ├── lg_magic.py              # Raw HIDRAW packet analyzer
+│   └── uinput_mouse.py          # Virtual mouse via uinput
+├── tests/                       # Test suite (84 tests, CI-validated)
+├── 51-lgimu.rules               # udev rule for IMU device access
+└── README.md
+```
 
-- **kernel/dkms.conf** - DKMS configuration file for automated kernel module building
-- **kernel/lg_magic_main.c** - Main kernel driver implementation
-- **kernel/lg_magic_airmouse.h** - Header file for airmouse calibration structures
-- **kernel/lg_magic_airmouse.c** - Airmouse calibration and filtering implementation
-- **kernel/Makefile** - Build system for the kernel module
-- **51-lgimu.rules** - Udev rule for non-root raw IMU access. Place to `/etc/udev/rules.d/` if needed.
+## Architecture
 
-### Python Tools
-
-- **scripts/lg_magic.py** - HIDRAW-level packet analyzer and debug tool. Initial tool, kept for historical reasons
-- **scripts/calibrate.py** - IMU calibration utility (accelerometer and gyroscope)
-- **scripts/convert_calib.py** - Converts JSON calibration to binary format for kernel module
-- **scripts/display_imu.py** - Real-time IMU data visualization and airmouse emulation
+```
+┌─────────────────────────────────────────────────────────────┐
+│              LG Magic Remote (MR20)                         │
+│          Bluetooth HID device 000F:3412                     │
+│    Report ID 0xFD: counter + 6×IMU + buttons + wheel       │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ BT HID
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│                Linux Kernel HID Subsystem                   │
+│              hidraw dev + raw_event callback                │
+└────────┬────────────────────────────────────┬───────────────┘
+         │                                    │
+         ▼                                    ▼
+┌────────────────────────┐      ┌─────────────────────────────┐
+│   lg_magic.ko          │      │   Python Tools (userspace)   │
+│                        │      │                             │
+│  ┌──────────────────┐  │      │  display_imu.py  visualizer │
+│  │ raw_event()      │  │      │  calibrate.py    calib math │
+│  │ ┌──────────────┐ │  │ evdev│  convert_calib.py JSON→bin  │
+│  │ │ Button map   │ │  │◄─────│  lg_magic.py     HIDRAW dump│
+│  │ │ (31 buttons) │ │  │      │  uinput_mouse.py uinput dev │
+│  │ ├──────────────┤ │  │      │  draw_cube.py    3D cube    │
+│  │ │ Airmouse     │ │  │      └─────────────────────────────┘
+│  │ │ (fixed-point)│ │  │
+│  │ │ • bias corr  │ │  │
+│  │ │ • LPF filter │ │  │      Calibration Pipeline:
+│  │ │ • threshold  │ │  │      ┌──────────┐   ┌───────────┐
+│  │ │ • mousemap   │ │  │      │ CSV data │──▶│ calibrate │
+│  │ └──────────────┘ │  │      └──────────┘   │   .py     │
+│  │                   │  │                      └─────┬─────┘
+│  │ Firmware loader:  │  │                      JSON calib
+│  │ IEEE 754 → int    │  │                      ┌─────▼─────┐
+│  │ (no kernel FPU)   │  │                      │ convert   │
+│  └──────────────────┘  │                      │ _calib.py │
+│                        │                      └─────┬─────┘
+│  Output: 2 evdev devs │                    32-byte binary
+│  • LG Magic Remote    │                      ┌─────▼─────┐
+│  • LG Magic Remote IMU│                      │/lib/      │
+└────────────────────────┘                      │firmware/  │
+                                                └───────────┘
+```
 
 ## Kernel Module Features
 
@@ -190,8 +239,10 @@ frame with a more intuitive orientation for AHRS and airmouse use.
 This rotation is **not** applied in the kernel module (the kernel
 calibration directly maps gyro axes to mouse axes: gyro Z → mouse X,
 gyro X → mouse Y).
-- `gyro_bias`: Gyroscope zero-offset values
-- `gyro_scale`: Gyroscope scaling factors
+- `gyro_bias`: Gyroscope zero-offset values (computed during calibration)
+- `gyro_scale`: Gyroscope scaling factors (tune manually, recommended ~0.07)
+- `alpha`: Low-pass filter coefficient (0.0-1.0, recommended 0.2)
+- `mouse_k`: Airmouse sensitivity multiplier (0.0-1.0, recommended 0.5)
 
 ## Python Tools Usage
 
@@ -272,6 +323,49 @@ Other report types (0xF9, 0x01) were not observed, maybe used for other function
 - **Kernel versions**: 4.15+ (tested on 6.11)
 - **Python**: 3.6+
 - **Dependencies**: numpy, scipy, pyqtgraph, python-evdev
+
+## Troubleshooting
+
+### "No IMU evdev device found"
+The IMU device is **disabled by default**.  Enable it:
+```bash
+sudo sh -c 'echo 1 > /sys/module/lg_magic/parameters/imu_evdev'
+```
+Or load the module with `imu_evdev=1`.
+
+### "Airmouse not working" / no REL_X/REL_Y events
+1. Check airmouse is enabled: `cat /sys/module/lg_magic/parameters/airmouse` → should be `1`
+2. Check calibration loaded: `dmesg | grep -i calib` → should show "Loaded calibration from..."
+3. If no calibration: place `lg_magic_calib.bin` in `/lib/firmware/` and reload module
+4. Increase debug level: `echo 2 > /sys/module/lg_magic/parameters/debug` then check dmesg
+5. Try lowering threshold: `echo 150 > /sys/module/lg_magic/parameters/airmouse_threshold`
+
+### "Buttons not recognized" / wrong keycodes
+Run `python3 lg_magic.py` to see raw HID codes as you press buttons.
+Unknown codes can be added to `lg_btn_map[]` in `kernel/lg_magic_main.c`.
+
+### "Unknown descriptor" warnings in dmesg
+Non-0xFD HID reports (types 0xF9, 0x01) are expected and logged at debug level only.
+Set `debug=2` to see them, `debug=1` to hide them entirely.
+
+### Module fails to build
+```bash
+# Ensure kernel headers match running kernel
+sudo apt-get install linux-headers-$(uname -r) build-essential
+cd kernel && make clean && make
+```
+
+### Remote not detected after suspend
+This is expected — Bluetooth reconnection is handled by the Bluetooth stack.
+The kernel driver resets gyro state on resume automatically.
+If the remote stays disconnected, toggle Bluetooth or re-pair.
+
+### Calibration "failed validation"
+The calibration binary contains values outside acceptable ranges.
+Re-run calibration and check:
+- Gyro bias should be < |100| units (raw s16)
+- Gyro scale should be < |10|
+- Alpha and mouse_k should be between 0.0 and 1.0
 
 ## Contributing
 
