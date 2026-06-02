@@ -27,18 +27,50 @@ def load_imu_csv(filename):
 
 
 def save_calibration_json(filename, bias=None, matrix=None, gyro_bias=None):
+    """Save calibration to JSON, merging with existing file if present.
+
+    If filename already exists, loads it and updates only the provided
+    sections.  This allows running --gyro and --accel separately and
+    accumulating results into the same output file.
+    """
+    import os
+
     if bias is None:
         bias = []
     if matrix is None:
         matrix = []
     if gyro_bias is None:
         gyro_bias = [0.0, 0.0, 0.0]
+
     bias_list = [float(f"{v:.6f}") for v in bias]
     matrix_list = [[float(f"{v:.6f}") for v in row] for row in matrix]
+
+    # Load existing file if present and merge
+    existing = {}
+    if os.path.exists(filename):
+        try:
+            with open(filename) as f:
+                existing = json.load(f)
+            print(f"Merging with existing calibration from {filename}")
+        except (json.JSONDecodeError, OSError):
+            print(f"Warning: could not read existing {filename}, overwriting")
+
     calib_dict = {
-        "accel": {"bias": bias_list, "matrix": matrix_list},
-        "gyro": {"bias": [float(f"{v:.6f}") for v in gyro_bias], "scale": [1, 1, 1]},
+        "accel": existing.get("accel", {}),
+        "gyro": existing.get("gyro", {}),
     }
+
+    # Update accel section if bias or matrix was provided (non-empty)
+    if bias_list or matrix_list:
+        calib_dict["accel"] = {"bias": bias_list, "matrix": matrix_list}
+
+    # Update gyro section if gyro_bias was provided (non-default or provided)
+    if gyro_bias != [0.0, 0.0, 0.0] or "gyro" not in existing:
+        calib_dict["gyro"] = {
+            "bias": [float(f"{v:.6f}") for v in gyro_bias],
+            "scale": calib_dict["gyro"].get("scale", [1, 1, 1]),
+        }
+
     with open(filename, "w") as f:
         json.dump(calib_dict, f, indent=4)
     print(f"Calibration saved to {filename}")

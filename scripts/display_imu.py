@@ -158,7 +158,7 @@ def read_events(args):
                     )
 
                 if args.ahrs and dt:
-                    # madgwick.Dt = dt
+                    madgwick.Dt = dt
 
                     if q is None:
                         q = accel_to_quat(a_corr)
@@ -187,6 +187,8 @@ def main():
     args = parser.parse_args()
 
     if args.cube:
+        # --cube requires AHRS processing for orientation data
+        args.ahrs = True
         t = threading.Thread(target=read_events, kwargs={"args": args}, daemon=True)
         t.start()
 

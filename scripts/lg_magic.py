@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+import glob
+import os
 import struct
 
-HIDRAW_DEVICE = "/dev/hidraw7"
+HIDRAW_DEVICE = "/dev/hidraw7"  # fallback if auto-detect fails
 
 # Expected payload sizes (excluding Report ID)
 EXPECTED_SIZES = {
@@ -54,6 +56,29 @@ BUTTON_CODES = {
     # fill as discovered
 }
 
+
+def find_lg_remote():
+    """Auto-detect the LG Magic Remote HIDRAW device.
+
+    Scans /dev/hidraw* for a device matching LG vendor/product
+    (000F:3412) via sysfs.  Falls back to the hardcoded HIDRAW_DEVICE
+    if detection fails.
+    """
+    for dev in sorted(glob.glob("/dev/hidraw*")):
+        uevent_path = os.path.join("/sys/class/hidraw", os.path.basename(dev), "device", "uevent")
+        try:
+            with open(uevent_path) as f:
+                uevent = f.read()
+        except OSError:
+            continue
+        # LG vendor=000F, product=3412
+        if "000F" in uevent and "3412" in uevent:
+            print(f"Found LG Magic Remote at {dev}")
+            return dev
+    print(f"LG remote not auto-detected, trying fallback {HIDRAW_DEVICE}")
+    return HIDRAW_DEVICE
+
+
 wheel_pos = 0
 
 
@@ -104,7 +129,9 @@ parsers = {
     0x01: parse_01,
 }
 
-with open(HIDRAW_DEVICE, "rb", buffering=0) as f:
+found_dev = find_lg_remote()
+
+with open(found_dev, "rb", buffering=0) as f:
     while True:
         report_id_raw = f.read(1)
         if not report_id_raw:

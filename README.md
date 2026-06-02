@@ -114,14 +114,13 @@ python3 display_imu.py --csv samples.csv
 2. **Calculate calibration values:**
 ```bash
 # Calibrate accelerometer (slowly rotate across all axes while collecting)
-python3 calibrate.py --accel samples.csv calib_accel.json
+python3 calibrate.py --accel samples.csv calib.json
 
 # Calibrate gyroscope (keep remote stationary while collecting)
-python3 calibrate.py --gyro samples.csv calib_gyro.json
+# This auto-merges with the existing calib.json from the accel step
+python3 calibrate.py --gyro samples.csv calib.json
 
-# Combine Gyro/Accel JSONs
-Combine gyro/accel sections. Adjust gyro scale. Out of scope of this project, recommended value about 0.07
-
+# Adjust gyro scale if needed (edit calib.json, recommended value ~0.07)
 ```
 
 3. **Convert to binary format:**
@@ -132,6 +131,35 @@ python3 convert_calib.py calib.json lg_magic_calib.bin --alpha 0.2 --mouse_k 0.5
 ### Calibration Parameters
 - `alpha`: Low-pass filter coefficient (0.0-1.0)
 - `mouse_k`: Airmouse sensitivity multiplier
+
+### Coordinate System
+
+The remote's IMU uses a right-handed coordinate system.  When held flat
+(buttons facing up, IR end pointing forward):
+
+```
+         +X (right)
+          →
+    ┌──────────┐
+    │  LG       │ ← +Y (forward / IR end)
+    │  Magic    │
+    │  Remote   │
+    │           │
+    └──────────┘
+          ↓
+         +Z (down toward floor)
+```
+
+Axes (raw IMU, before rotation):
+- **X**: lateral (right) — gyro pitch axis
+- **Y**: longitudinal (forward) — gyro roll axis
+- **Z**: vertical (down) — gyro yaw axis
+
+The Python tools apply an `R_align` rotation to align the coordinate
+frame with a more intuitive orientation for AHRS and airmouse use.
+This rotation is **not** applied in the kernel module (the kernel
+calibration directly maps gyro axes to mouse axes: gyro Z → mouse X,
+gyro X → mouse Y).
 - `gyro_bias`: Gyroscope zero-offset values
 - `gyro_scale`: Gyroscope scaling factors
 
@@ -151,7 +179,7 @@ python3 display_imu.py
 # AHRS
 python3 display_imu.py --calib calib.json --ahrs
 
-# 3D orientation cube
+# 3D orientation cube (--cube implies --ahrs)
 python3 display_imu.py --calib calib.json --cube
 
 # Uinput airmouse
