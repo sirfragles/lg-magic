@@ -294,6 +294,8 @@ static int emit_key(const char *path, const char *name)
 			strerror(errno));
 		return 1;
 	}
+	fprintf(stderr, "fake_devices: emit %s (code %d) on %s\n", name, code,
+		path);
 	if (emit_ev(fd, EV_KEY, (__u16)code, 1) < 0 ||
 	    emit_ev(fd, EV_SYN, SYN_REPORT, 0) < 0 ||
 	    emit_ev(fd, EV_KEY, (__u16)code, 0) < 0 ||

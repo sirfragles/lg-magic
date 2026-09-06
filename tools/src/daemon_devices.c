@@ -173,6 +173,8 @@ static int remote_open(struct daemon_remote *r, const char *identity,
 	if (evdev_grab(r->kbd.fd, 1) < 0)
 		log_info("cannot grab %s: %s (continuing without exclusive "
 			 "grab)", kbd_path, strerror(errno));
+	else
+		log_debug(dd, "grabbed %s", kbd_path);
 
 	/* IMU: NO grab - `lg-magic imu --csv/--mouse` runs in parallel. */
 	if (imu_path[0] &&
@@ -380,6 +382,9 @@ static int handle_kbd(struct daemon_remote *r,
 
 	rv = evdev_read_frame_ext(&r->kbd, &f, err, sizeof(err));
 	if (rv == 1) {
+		if (f.nkeys || f.wheel)
+			log_debug(dd, "keyboard frame from %s: %d keys, wheel %d",
+				  r->identity, f.nkeys, f.wheel);
 		pipeline_keyboard(&r->pl, &f, kbd_uinput, mouse_uinput);
 		return 1;
 	}

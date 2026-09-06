@@ -52,6 +52,7 @@ DAEMON_PID=
 FAKE_PID=
 DBUS_PID=
 POLKIT_PID=
+DAEMON_LOG=
 
 cleanup()
 {
@@ -69,6 +70,8 @@ trap cleanup EXIT INT TERM
 fail()
 {
 	echo "FAIL: $*"
+	[ -n "$last_exp_file" ] && { echo "--- watcher output ---"; cat "$last_exp_file" 2>/dev/null || true; }
+	[ -n "$DAEMON_LOG" ] && { echo "--- daemon log tail ---"; tail -40 "$DAEMON_LOG" 2>/dev/null || true; }
 	exit 1
 }
 
@@ -216,6 +219,7 @@ echo "fake: kbd=$KBD imu=$IMU"
 $DAEMON --keyboard "$KBD" --config-root "$CFG" --state-dir "$STATE" \
 	--debug > "$TMP/daemon.log" 2>&1 &
 DAEMON_PID=$!
+DAEMON_LOG=$TMP/daemon.log
 wait_for "daemon startup" "virtual devices ready" "$TMP/daemon.log"
 wait_for "daemon bus" "bus name org.lgmagic acquired" "$TMP/daemon.log"
 wait_for "daemon takeover" "remote unknown: keyboard" "$TMP/daemon.log"
@@ -482,6 +486,7 @@ start_daemon()
 	$DAEMON --keyboard "$KBD2" --config-root "$CFG" --state-dir "$STATE" \
 		--debug > "$TMP/daemon2.log" 2>&1 &
 	DAEMON_PID=$!
+	DAEMON_LOG=$TMP/daemon2.log
 	wait_for "daemon restart" "virtual devices ready" "$TMP/daemon2.log"
 	wait_for "daemon bus" "bus name org.lgmagic acquired" "$TMP/daemon2.log"
 	wait_for "daemon takeover" "remote unknown: keyboard" "$TMP/daemon2.log"
