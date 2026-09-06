@@ -1,0 +1,9 @@
+lg-magic (1.0-1) unstable; urgency=medium
+
+  * Initial release: DKMS kernel module + lg-magic userspace tools.
+    - C port of the Python tools as a single multi-call binary (no
+      Python runtime dependencies)
+    - lg-magic setup: interactive configuration and calibration wizard
+    - udev rules for the IMU evdev device, hidraw and uinput
+
+ -- Ilya Chelyadin <sirfragles@users.noreply.github.com>  Sat, 06 Sep 2026 12:00:00 +0000

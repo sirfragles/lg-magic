@@ -5,20 +5,30 @@
 
 ## Описание
 
-Этот проект предоставляет комплексный драйвер для ядра Linux и набор инструментов для пульта LG Magic Remote (MR20 и аналогичных). Драйвер обеспечивает полную функциональность пульта, включая назначение кнопок, гироскопическое управление курсором (аэромышь) и прямой доступ к данным IMU (акселерометр и гироскоп). Пакет включает как модуль ядра, так и утилиты на Python для калибровки, тестирования и визуализации.
+Этот проект предоставляет комплексный драйвер для ядра Linux и набор инструментов для пульта LG Magic Remote (MR20 и аналогичных). Драйвер обеспечивает полную функциональность пульта, включая назначение кнопок, гироскопическое управление курсором (аэромышь) и прямой доступ к данным IMU (акселерометр и гироскоп). Пакет включает модуль ядра (DKMS) и инструменты `lg-magic` — одну бинарную программу на C (без зависимостей от Python) с чтением IMU, анализатором HID, утилитами калибровки и интерактивным мастером `lg-magic setup`. Оригинальные скрипты Python оставлены в `scripts/` как справочные.
 
 ## Структура проекта
 
 ### Файлы модуля ядра
 
-- **kernel/dkms.conf** - файл конфигурации DKMS для автоматической сборки модуля ядра
+- **dkms.conf** - файл конфигурации DKMS (в корне; DKMS собирает из корня исходников)
 - **kernel/lg_magic_main.c** - реализация драйвера ядра
 - **kernel/lg_magic_airmouse.h** - заголовочный файл структуры калибровочных значений 
 - **kernel/lg_magic_airmouse.c** - реализация калибровки и фильтрации аэромыши
 - **kernel/Makefile** - система сборки для модуля ядра
 - **51-lgimu.rules** - правило udev для доступа к необработанным данным IMU без прав суперпользователя. Разместить в `/etc/udev/rules.d/` при необходимости.
 
-### Инструменты Python
+### Инструменты C (`tools/`)
+
+- **`lg-magic`** — одна бинарная программа (`make tools`, только libc/libm):
+  - `analyze` — анализатор HIDRAW (автоопределение по VID/PID)
+  - `imu` — чтение IMU: сырые данные, запись `--csv`, углы `--ahrs`, куб `--cube` в терминале, аэромышь `--mouse`
+  - `calibrate` — калибровка акселерометра/гироскопа из CSV
+  - `calib2bin` — JSON-калибровка в 32-байтовый blob прошивки
+  - `config` — просмотр/изменение конфигурации
+  - `setup` — интерактивный мастер настройки и калибровки
+
+### Инструменты Python (устарели, справочные)
 
 - **scripts/lg_magic.py** - Низкоуровневый анализатор пакетов. Изначальный инструмент, сохранен для истории
 - **scripts/calibrate.py** - Утилита калибровки IMU
@@ -69,13 +79,32 @@ make
 sudo insmod lg_magic.ko
 ```
 
-### Установка через DKMS
+### Пакет Debian (рекомендуется)
+```bash
+dpkg-buildpackage -us -uc -b
+sudo apt install ../lg-magic-dkms_1.0-1_amd64.deb
+# Пакет соберёт и установит модуль через DKMS и поставит lg-magic.
+# Завершите настройку:
+sudo lg-magic setup
+```
+
+**Релизы.** GitHub Actions собирает `.deb` на каждый тег версии (`v*`)
+и прикрепляет его к GitHub Release для этого тега. CI также запускается
+на каждый push и pull request: собирает модуль и инструменты, прогоняет
+все тесты и собирает `.deb` (доступен как артефакт workflow).
+
+### Установка через DKMS (вручную)
+DKMS собирает из корня исходников — копируйте только нужное модулю:
 ```bash
 sudo mkdir /usr/src/lg-magic-1.0
-sudo cp * /usr/src/lg-magic-1.0/
+sudo cp Makefile dkms.conf COPYING /usr/src/lg-magic-1.0/
+sudo cp -r kernel include /usr/src/lg-magic-1.0/
 sudo dkms add -m lg-magic -v 1.0
 sudo dkms build -m lg-magic -v 1.0
 sudo dkms install -m lg-magic -v 1.0
+# Инструменты DKMS не собирает — соберите и установите отдельно:
+make tools
+sudo make install
 ```
 
 ### Параметры модуля
@@ -106,18 +135,26 @@ echo 2 > /sys/module/lg_magic/parameters/debug
 
 ### Создание файлов калибровки
 
+Проще всего — мастер настройки: он записывает, считает, сохраняет JSON и бинарный
+файл прошивки и проверяет, что ядро загрузило калибровку:
+```bash
+sudo lg-magic setup
+```
+
+Вручную (инструменты на C):
+
 1. **Сбор данных IMU для обеих калибровок:**
 ```bash
-python3 display_imu.py --csv samples.csv
+lg-magic imu --csv samples.csv
 ```
 
 2. **Вычисление калибровочных значений:**
 ```bash
 # Калибровка акселерометра (медленно вращайте по всем осям во время сбора данных)
-python3 calibrate.py --accel samples.csv calib_accel.json
+lg-magic calibrate samples.csv calib_accel.json --accel
 
 # Калибровка гироскопа (держите пульт неподвижно во время сбора данных)
-python3 calibrate.py --gyro samples.csv calib_gyro.json
+lg-magic calibrate samples.csv calib_gyro.json --gyro
 
 # Объединение JSON
 Объедините разделы gyro/accel. Настройте коэффициент гироскопа. Выходит за рамки этого проекта, рекомендуемое значение около 0.07
@@ -125,7 +162,8 @@ python3 calibrate.py --gyro samples.csv calib_gyro.json
 
 3. **Конвертация в бинарный формат:**
 ```bash
-python3 convert_calib.py calib.json lg_magic_calib.bin --alpha 0.2 --mouse_k 0.5
+lg-magic calib2bin calib.json lg_magic_calib.bin --alpha 0.2 --mouse_k 0.5
+sudo cp lg_magic_calib.bin /lib/firmware/
 ```
 
 ### Параметры калибровки
@@ -134,7 +172,27 @@ python3 convert_calib.py calib.json lg_magic_calib.bin --alpha 0.2 --mouse_k 0.5
 - `gyro_bias`: Значения дрейфа гироскопа
 - `gyro_scale`: Коэффициенты гироскопа
 
-## Использование инструментов Python
+## Инструменты lg-magic (C)
+
+Все инструменты — одна бинарная программа без зависимостей от Python.
+`lg-magic --help` / `lg-magic <cmd> --help` показывают справку.
+
+```bash
+lg-magic analyze                      # анализатор HIDRAW (автоопределение по VID/PID)
+lg-magic imu                          # сырые данные IMU
+lg-magic imu --csv samples.csv        # запись данных для калибровки
+lg-magic imu --calib calib.json --ahrs     # углы ориентации (Madgwick)
+lg-magic imu --calib calib.json --cube     # куб в терминале (ANSI)
+lg-magic imu --calib calib.json --mouse    # аэромышь через uinput
+lg-magic config                       # показать конфигурацию
+lg-magic config set mouse_k 0.5       # сохранить в ~/.config/lg-magic/config.json
+sudo lg-magic setup                   # мастер: параметры, калибровка, blob, тест мыши
+```
+
+Конфигурация: значения по умолчанию < `/etc/lg-magic/config.json` <
+`~/.config/lg-magic/config.json` < `--config FILE` < флаги командной строки.
+
+## Использование инструментов Python (устарело)
 
 ### lg_magic.py - Анализатор пакетов
 ```bash
