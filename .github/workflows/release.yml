@@ -78,11 +78,20 @@ jobs:
           cp rpm/lg-magic.spec ~/rpmbuild/SPECS/
           rpmbuild -bb ~/rpmbuild/SPECS/lg-magic.spec
 
+      - name: Stage the .rpm inside the workspace
+        run: |
+          # upload-artifact's globber fails on absolute paths with a
+          # wildcard in a middle segment (RPMS/*/) - stage the file in
+          # the workspace and upload a last-segment-only glob instead
+          # (the same pattern the deb job uses).
+          mkdir -p dist
+          cp ~/rpmbuild/RPMS/*/lg-magic-2.0*.rpm dist/
+
       - name: Upload the .rpm artifact
         uses: actions/upload-artifact@v4
         with:
           name: lg-magic-rpm
-          path: /root/rpmbuild/RPMS/*/lg-magic-2.0*.rpm
+          path: dist/lg-magic-2.0*.rpm
           if-no-files-found: error
 
   # Arch: makepkg in an Arch container as a non-root builder. dkms is

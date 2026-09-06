@@ -55,7 +55,15 @@ jobs:
         # lg-magic binary.
 
       - name: Run the bus + polkit e2e (fake devices)
-        run: sudo sh tools/tests/daemon_e2e.sh
+        run: |
+          # The runner ships with a live system bus on
+          # /run/dbus/system_bus_socket; daemon_e2e.sh needs that socket
+          # free to run its own throwaway bus (lg-magicd opens the fixed
+          # system-bus socket, it cannot use a private address). The CI
+          # VM is ephemeral and no later step uses the bus - stop it.
+          sudo systemctl stop dbus.socket dbus.service || true
+          sudo rm -f /run/dbus/system_bus_socket || true
+          sudo sh tools/tests/daemon_e2e.sh
         # Full input-takeover e2e: a fake "LG Magic Remote" keyboard + IMU
         # on uinput, a throwaway system bus with polkitd, lg-magicd, and
         # assertions on mapping, profiles, calibration, scroll, airmouse,
@@ -182,11 +190,20 @@ jobs:
           done
           echo "OK: all rpm files present"
 
+      - name: Stage the .rpm inside the workspace
+        run: |
+          # upload-artifact's globber fails on absolute paths with a
+          # wildcard in a middle segment (RPMS/*/) - stage the file in
+          # the workspace and upload a last-segment-only glob instead
+          # (the same pattern the deb job uses).
+          mkdir -p dist
+          cp ~/rpmbuild/RPMS/*/lg-magic-2.0*.rpm dist/
+
       - name: Upload the .rpm artifact
         uses: actions/upload-artifact@v4
         with:
           name: lg-magic-rpm
-          path: /root/rpmbuild/RPMS/*/lg-magic-2.0*.rpm
+          path: dist/lg-magic-2.0*.rpm
           retention-days: 30
           if-no-files-found: error
 
