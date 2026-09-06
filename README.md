@@ -5,20 +5,33 @@
 
 ## Overview
 
-This project provides a comprehensive Linux kernel driver and toolset for the LG Magic Remote (MR20 and similar models). The driver enables full functionality of the remote including button mapping, gyroscopic airmouse control, and IMU data access. The package includes both a kernel module and Python utilities for calibration, testing, and visualization.
+This project provides a comprehensive Linux kernel driver and toolset for the LG Magic Remote (MR20 and similar models). The driver enables full functionality of the remote including button mapping, gyroscopic airmouse control, and IMU data access. The package includes a kernel module (DKMS) and the `lg-magic` tools — a single C binary (no Python runtime dependencies) with an IMU reader, HID report analyzer, calibration utilities and the interactive `lg-magic setup` wizard that calibrates the remote end to end. The original Python scripts are kept under `scripts/` as a reference.
 
 ## Project Structure
 
 ### Kernel Module Files
 
-- **kernel/dkms.conf** - DKMS configuration file for automated kernel module building
+- **dkms.conf** - DKMS configuration (at the repo root; DKMS builds from the source root)
 - **kernel/lg_magic_main.c** - Main kernel driver implementation
 - **kernel/lg_magic_airmouse.h** - Header file for airmouse calibration structures
 - **kernel/lg_magic_airmouse.c** - Airmouse calibration and filtering implementation
 - **kernel/Makefile** - Build system for the kernel module
-- **51-lgimu.rules** - Udev rule for non-root raw IMU access. Place to `/etc/udev/rules.d/` if needed.
+- **include/lg_magic_calib.h** - `struct lg_magic_airmouse_calib`, shared verbatim between the kernel and the tools
+- **51-lgimu.rules** - Udev rules for the IMU evdev device, the hidraw node and `/dev/uinput`. Installed to `/etc/udev/rules.d/` by `make install` / the .deb
 
-### Python Tools
+### C Tools (`tools/`)
+
+- **`lg-magic`** - single multi-call binary, `make tools` (only libc/libm):
+  - `lg-magic analyze` - HIDRAW packet analyzer (like `lg_magic.py`, with auto-detection by VID/PID)
+  - `lg-magic imu` - IMU reader: raw data, `--csv` recording, `--ahrs` orientation angles, `--cube` ANSI terminal cube, `--mouse` uinput airmouse
+  - `lg-magic calibrate` - accelerometer (Levenberg-Marquardt) / gyroscope calibration from a CSV recording
+  - `lg-magic calib2bin` - JSON calibration to the 32-byte kernel firmware blob
+  - `lg-magic config` - show / change the configuration (JSON files, see below)
+  - `lg-magic setup` - interactive wizard: module parameters, calibration, firmware blob, airmouse test
+
+### Python Tools (deprecated reference)
+
+The Python scripts are kept for reference and for regenerating the golden test data (`testdata/`). The C tools replicate their output byte for byte (see TESTING.md).
 
 - **scripts/lg_magic.py** - HIDRAW-level packet analyzer and debug tool. Initial tool, kept for historical reasons
 - **scripts/calibrate.py** - IMU calibration utility (accelerometer and gyroscope)
@@ -69,13 +82,34 @@ make
 sudo insmod lg_magic.ko
 ```
 
-### DKMS Installation
+### Debian Package (recommended)
+```bash
+# Build the .deb (needs devscripts, dh-dkms, debhelper)
+dpkg-buildpackage -us -uc -b
+sudo apt install ../lg-magic-dkms_1.0-1_amd64.deb
+# The package builds/installs the module via DKMS and installs lg-magic.
+# Finish the setup:
+sudo lg-magic setup
+```
+
+**Releases.** GitHub Actions builds the `.deb` on every version tag
+(`v*`) and attaches it to the GitHub Release for that tag. CI also runs
+on every push and pull request: it builds the module and tools, runs the
+full test suite, and packages the `.deb` (downloadable as a workflow
+artifact).
+
+### DKMS Installation (manual)
+DKMS builds from the source root, so copy only what the module build needs:
 ```bash
 sudo mkdir /usr/src/lg-magic-1.0
-sudo cp * /usr/src/lg-magic-1.0/
+sudo cp Makefile dkms.conf COPYING /usr/src/lg-magic-1.0/
+sudo cp -r kernel include /usr/src/lg-magic-1.0/
 sudo dkms add -m lg-magic -v 1.0
 sudo dkms build -m lg-magic -v 1.0
 sudo dkms install -m lg-magic -v 1.0
+# The tools are not built by DKMS - build and install them separately:
+make tools
+sudo make install
 ```
 
 ### Module Parameters
@@ -106,18 +140,26 @@ The driver loads calibration data from binary files via Linux Firmware subsystem
 
 ### Creating Calibration Files
 
+The easiest way is the wizard — it records, fits, writes the JSON and the
+firmware blob, and checks that the kernel loaded it:
+```bash
+sudo lg-magic setup
+```
+
+Or do it manually with the C tools:
+
 1. **Collect IMU samples for both calibrations:**
 ```bash
-python3 display_imu.py --csv samples.csv
+lg-magic imu --csv samples.csv
 ```
 
 2. **Calculate calibration values:**
 ```bash
 # Calibrate accelerometer (slowly rotate across all axes while collecting)
-python3 calibrate.py --accel samples.csv calib_accel.json
+lg-magic calibrate samples.csv calib_accel.json --accel
 
 # Calibrate gyroscope (keep remote stationary while collecting)
-python3 calibrate.py --gyro samples.csv calib_gyro.json
+lg-magic calibrate samples.csv calib_gyro.json --gyro
 
 # Combine Gyro/Accel JSONs
 Combine gyro/accel sections. Adjust gyro scale. Out of scope of this project, recommended value about 0.07
@@ -126,7 +168,8 @@ Combine gyro/accel sections. Adjust gyro scale. Out of scope of this project, re
 
 3. **Convert to binary format:**
 ```bash
-python3 convert_calib.py calib.json lg_magic_calib.bin --alpha 0.2 --mouse_k 0.5
+lg-magic calib2bin calib.json lg_magic_calib.bin --alpha 0.2 --mouse_k 0.5
+sudo cp lg_magic_calib.bin /lib/firmware/
 ```
 
 ### Calibration Parameters
@@ -135,7 +178,46 @@ python3 convert_calib.py calib.json lg_magic_calib.bin --alpha 0.2 --mouse_k 0.5
 - `gyro_bias`: Gyroscope zero-offset values
 - `gyro_scale`: Gyroscope scaling factors
 
-## Python Tools Usage
+## lg-magic Tools Usage
+
+All tools live in one binary. Run `lg-magic --help` or `lg-magic <cmd> --help`.
+
+```bash
+# HIDRAW packet analyzer (auto-detects the remote by VID/PID 000f:3412)
+lg-magic analyze                       # or: lg-magic analyze --device /dev/hidrawN
+
+# Raw IMU data display (auto-detects the "IMU" evdev device)
+lg-magic imu
+
+# Record raw samples (for calibration)
+lg-magic imu --csv samples.csv
+
+# Orientation angles (Madgwick AHRS)
+lg-magic imu --calib calib.json --ahrs
+
+# 3D orientation cube in the terminal (ANSI, no GPU libraries)
+lg-magic imu --calib calib.json --cube
+
+# Uinput airmouse (needs /dev/uinput access - see the udev rule)
+lg-magic imu --calib calib.json --mouse
+
+# Configuration (precedence: defaults < /etc/lg-magic/config.json <
+# ~/.config/lg-magic/config.json < --config FILE < CLI flags)
+lg-magic config                        # show the effective configuration
+lg-magic config set mouse_k 0.5        # save into ~/.config/lg-magic/config.json
+lg-magic config path                   # config file locations
+
+# Setup wizard: module parameters, calibration, firmware blob, airmouse test
+sudo lg-magic setup                    # --non-interactive accepts the defaults
+```
+
+Deliberate fixes over the Python scripts (all documented in TESTING.md):
+`lg-magic analyze` auto-detects the remote instead of a hardcoded
+`/dev/hidraw7`; `--cube` implies `--ahrs` (the Python `--cube` alone showed
+a static cube); `--gyro` calibrations write an identity accelerometer
+correction instead of empty arrays (empty arrays broke `--ahrs`).
+
+## Python Tools Usage (deprecated)
 
 ### lg_magic.py - Packet Analyzer
 ```bash
@@ -205,15 +287,20 @@ Other report types (0xF9, 0x01) were not observed, maybe used for other function
 ## Filesystem Locations
 
 - **Module**: `/lib/modules/$(uname -r)/kernel/drivers/input/misc/lg_magic.ko`
-- **Calibration**: `/lib/firmware/lg_magic_calib.bin`
+- **Calibration**: `/lib/firmware/lg_magic_calib_XX_XX_XX_XX_XX_XX.bin` (per-MAC) and `/lib/firmware/lg_magic_calib.bin` (fallback)
+- **Calibration JSON (tools)**: `/etc/lg-magic/calib.json`
+- **Module parameters**: `/etc/modprobe.d/lg-magic.conf`
+- **Config**: `/etc/lg-magic/config.json` and `~/.config/lg-magic/config.json`
+- **Binary**: `/usr/bin/lg-magic`
+- **Udev rule**: `/etc/udev/rules.d/51-lgimu.rules`
 - **DKMS source**: `/usr/src/lg-magic-1.0/`
 
 ## Compatibility
 
 - **Tested with**: LG Magic Remote MR20
 - **Kernel versions**: 4.15+ (tested on 6.11)
-- **Python**: 3.6+
-- **Dependencies**: numpy, scipy, pyqtgraph, python-evdev
+- **lg-magic tools**: Linux with libc/libm only (no Python, no GUI libraries)
+- **Python scripts** (deprecated): Python 3.6+, numpy, scipy, pyqtgraph, python-evdev
 
 ## Contributing
 

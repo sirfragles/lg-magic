@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --with dkms
+
+# Build only the tools here; the module itself is built by DKMS on the
+# target machine.
+override_dh_auto_build:
+	$(MAKE) tools
+
+# dh_dkms installs only dkms.conf into /usr/src/lg-magic-1.0 (and
+# generates the postinst/prerm dkms snippets); the module sources that
+# DKMS needs are installed here.
+override_dh_auto_install:
+	$(MAKE) DESTDIR=$(CURDIR)/debian/lg-magic-dkms install
+	install -d $(CURDIR)/debian/lg-magic-dkms/usr/src/lg-magic-1.0
+	cp -r kernel include $(CURDIR)/debian/lg-magic-dkms/usr/src/lg-magic-1.0/
+	install -m 644 Makefile COPYING $(CURDIR)/debian/lg-magic-dkms/usr/src/lg-magic-1.0/

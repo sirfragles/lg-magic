@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+
+modprobe -r lg_magic 2>/dev/null || true
+
+#DEBHELPER#

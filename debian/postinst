@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+#DEBHELPER#
+
+# Reload the udev rules so the input group gets access to the IMU evdev,
+# the hidraw node and /dev/uinput.
+if [ -x /usr/bin/udevadm ]; then
+    udevadm control --reload-rules || true
+    udevadm trigger || true
+fi
+
+# Secure Boot may reject the unsigned module - never break the install.
+modprobe lg_magic || true
+
+echo "lg-magic: driver installed."
+echo "Run 'sudo lg-magic setup' to configure the module and calibrate the remote."
