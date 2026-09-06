@@ -1,6 +1,16 @@
 #!/bin/sh
 set -e
 
+# Build and install the module via DKMS; every step is best-effort - a
+# machine without matching kernel headers (or with Secure Boot rejecting
+# the unsigned module) must never get a broken package transaction. The
+# same policy as the rpm spec and the Arch .install file.
+if [ "$1" = configure ] && [ -x /usr/sbin/dkms ]; then
+    dkms add -m lg-magic -v 2.0 || true
+    dkms build -m lg-magic -v 2.0 || true
+    dkms install -m lg-magic -v 2.0 || true
+fi
+
 #DEBHELPER#
 
 # Reload the udev rules so the input group gets access to the IMU evdev,
@@ -14,4 +24,5 @@ fi
 modprobe lg_magic || true
 
 echo "lg-magic: driver installed."
-echo "Run 'sudo lg-magic setup' to configure the module and calibrate the remote."
+echo "Run 'sudo lg-magic setup' to pick the input mode, configure the"
+echo "module and calibrate the remote."

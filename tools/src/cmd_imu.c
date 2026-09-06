@@ -15,6 +15,7 @@
  * Extensions over Python: --device, --duration S, --print-calib.
  * No threads: read -> process -> print, Ctrl+C via a flag + EINTR.
  */
+#include "airmouse.h"
 #include "calib.h"
 #include "config.h"
 #include "csv.h"
@@ -30,21 +31,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
-struct lpf {
-	double alpha;
-	double prev[3];
-};
-
-static void lpf_filter(struct lpf *f, const double g[3], double out[3])
-{
-	out[0] = f->alpha * g[0] + (1.0 - f->alpha) * f->prev[0];
-	out[1] = f->alpha * g[1] + (1.0 - f->alpha) * f->prev[1];
-	out[2] = f->alpha * g[2] + (1.0 - f->alpha) * f->prev[2];
-	f->prev[0] = out[0];
-	f->prev[1] = out[1];
-	f->prev[2] = out[2];
-}
 
 static void on_signal(int sig)
 {
@@ -78,7 +64,7 @@ int cmd_imu(int argc, char **argv)
 	struct imu_sample *samples = NULL;
 	size_t nsamples = 0, cap = 0;
 	struct madgwick_state mad;
-	struct lpf filt;
+	struct airmouse am;
 	int q_init = 0, ufd = -1;
 	struct sigaction sa;
 	struct timespec t0;
@@ -183,8 +169,7 @@ int cmd_imu(int argc, char **argv)
 			return 1;
 		}
 	}
-	filt.alpha = g_cfg->lpf_alpha;
-	filt.prev[0] = filt.prev[1] = filt.prev[2] = 0.0;
+	airmouse_init(&am, g_cfg->lpf_alpha, g_cfg->mouse_scale);
 
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = on_signal;
@@ -260,9 +245,8 @@ int cmd_imu(int argc, char **argv)
 			if (do_mouse) {
 				int dx, dy;
 
-				lpf_filter(&filt, g_corr, filt_out);
-				dx = (int)(-filt_out[2] * g_cfg->mouse_scale);
-				dy = (int)(-filt_out[1] * g_cfg->mouse_scale);
+				airmouse_process(&am, g_corr, filt_out,
+						 &dx, &dy);
 				printf("dt=%.5fs | gyro_filt =[% .6g % .6g "
 				       "% .6g]\n", dt ? dt : 0.0, filt_out[0],
 				       filt_out[1], filt_out[2]);

@@ -1,3 +1,20 @@
+lg-magic (2.0-1) unstable; urgency=medium
+
+  * v2.0: system daemon with full input takeover and polkit-gated writes.
+    - lg-magicd: EVIOCGRAB of the remote, profiles / calibration /
+      button mapping / airmouse pipeline, one virtual mouse + keyboard
+      (uinput), sd-bus interface org.lgmagic.Manager
+    - polkit actions org.lgmagic.{set-config,set-profile,reload};
+      the daemon is enabled by the setup wizard, not automatically
+    - kernel: raw_only=1 by default (raw decoder; wheel as REL_WHEEL,
+      no kernel airmouse); raw_only=0 restores the v1 behaviour
+    - CLI: device / profile / button / scroll / diagnose subcommands
+      over a dependency-free D-Bus client (lg-magic stays libc/libm)
+    - configuration moved from JSON to TOML (lg-magic config migrate)
+    - per-device state in /etc/lg-magic/devices.d and /var/lib/lg-magic
+
+ -- Ilya Chelyadin <sirfragles@users.noreply.github.com>  Sat, 06 Sep 2026 20:00:00 +0000
+
 lg-magic (1.0-1) unstable; urgency=medium
 
   * Initial release: DKMS kernel module + lg-magic userspace tools.

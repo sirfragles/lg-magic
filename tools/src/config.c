@@ -2,14 +2,15 @@
 /*
  * config.c - lg-magic user configuration.
  *
- * Precedence: built-in defaults < /etc/lg-magic/config.json <
- * ~/.config/lg-magic/config.json < --config FILE < CLI flags.
- * Files are JSON objects, parsed with our own json.c; unknown keys are
- * ignored, malformed files produce a warning and are skipped.
+ * Precedence: built-in defaults < /etc/lg-magic/config.toml <
+ * ~/.config/lg-magic/config.toml < --config FILE < CLI flags.
+ * Files are TOML, parsed with our own toml.c; unknown keys are ignored,
+ * malformed files produce a warning and are skipped.  A v1 config.json
+ * next to a missing config.toml produces a migrate hint.
  */
 #include "config.h"
 
-#include "json.h"
+#include "toml.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -18,11 +19,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#define CFG_SYSTEM_PATH "/etc/lg-magic/config.json"
+#define CFG_SYSTEM_PATH "/etc/lg-magic/config.toml"
 #define CFG_USER_DIR "/.config/lg-magic"
 
 struct config *g_cfg;
-const char *g_tool_version = "1.0";
+const char *g_tool_version = "2.0";
 
 enum {
 	X_IMU_DEVICE = 1 << 0,
@@ -66,7 +67,7 @@ static int key_bit(const char *key)
 }
 
 static void set_from_value(struct config *cfg, const char *key,
-			   struct json_value *v)
+			   const struct toml_value *v)
 {
 	char *s;
 	int bit = key_bit(key);
@@ -77,7 +78,7 @@ static void set_from_value(struct config *cfg, const char *key,
 	case X_IMU_DEVICE:
 	case X_HIDRAW_DEVICE:
 	case X_DEFAULT_CALIB:
-		if (v->type != JSON_STR)
+		if (v->type != TOML_STR)
 			return;
 		/* An empty string means "auto" - normalize to NULL. */
 		if (v->str[0] == '\0')
@@ -99,34 +100,35 @@ static void set_from_value(struct config *cfg, const char *key,
 		}
 		break;
 	case X_LPF_ALPHA:
-		if (v->type != JSON_NUM)
+		if (v->type != TOML_FLOAT && v->type != TOML_INT)
 			return;
-		cfg->lpf_alpha = v->num;
+		cfg->lpf_alpha = v->type == TOML_FLOAT ? v->d : (double)v->i;
 		break;
 	case X_MOUSE_SCALE:
-		if (v->type != JSON_NUM)
+		if (v->type != TOML_FLOAT && v->type != TOML_INT)
 			return;
-		cfg->mouse_scale = v->num;
+		cfg->mouse_scale = v->type == TOML_FLOAT ? v->d : (double)v->i;
 		break;
 	case X_MADGWICK_BETA:
-		if (v->type != JSON_NUM)
+		if (v->type != TOML_FLOAT && v->type != TOML_INT)
 			return;
-		cfg->madgwick_beta = v->num;
+		cfg->madgwick_beta = v->type == TOML_FLOAT ? v->d : (double)v->i;
 		break;
 	case X_ALPHA:
-		if (v->type != JSON_NUM)
+		if (v->type != TOML_FLOAT && v->type != TOML_INT)
 			return;
-		cfg->alpha = v->num;
+		cfg->alpha = v->type == TOML_FLOAT ? v->d : (double)v->i;
 		break;
 	case X_MOUSE_K:
-		if (v->type != JSON_NUM)
+		if (v->type != TOML_FLOAT && v->type != TOML_INT)
 			return;
-		cfg->mouse_k = v->num;
+		cfg->mouse_k = v->type == TOML_FLOAT ? v->d : (double)v->i;
 		break;
 	case X_GYRO_SCALE:
-		if (v->type != JSON_NUM)
+		if (v->type != TOML_FLOAT && v->type != TOML_INT)
 			return;
-		cfg->gyro_scale_default = v->num;
+		cfg->gyro_scale_default = v->type == TOML_FLOAT ?
+			v->d : (double)v->i;
 		break;
 	}
 	explicit_mask |= (unsigned)bit;
@@ -136,11 +138,26 @@ static void set_from_value(struct config *cfg, const char *key,
 /* Load                                                                */
 /* ------------------------------------------------------------------ */
 
+/* "<name>.toml" -> "<name>.json"; returns 0 when the path does not end
+ * in ".toml" or does not fit. */
+static int legacy_json_path(const char *path, char *out, size_t outsz)
+{
+	size_t len = strlen(path);
+
+	if (len < 5 || len >= outsz || strcmp(path + len - 5, ".toml") != 0) {
+		out[0] = '\0';
+		return -1;
+	}
+	memcpy(out, path, len - 4);
+	strcpy(out + len - 4, "json");
+	return 0;
+}
+
 static void merge_file(struct config *cfg, const char *path)
 {
 	const char *err = NULL;
-	size_t eoff = 0;
-	struct json_value *root;
+	size_t err_line = 0;
+	struct toml_value *root;
 	static const char *keys[] = {
 		"imu_device", "hidraw_device", "default_calib",
 		"lpf_alpha", "mouse_scale", "madgwick_beta",
@@ -150,25 +167,29 @@ static void merge_file(struct config *cfg, const char *path)
 	struct stat st;
 
 	/* Missing config files are the normal case - skip silently; warn
-	 * only when a file exists but cannot be parsed. */
-	if (stat(path, &st) != 0)
-		return;
+	 * only when a file exists but cannot be parsed.  A leftover v1
+	 * config.json next to a missing config.toml gets a hint. */
+	if (stat(path, &st) != 0) {
+		char legacy[4096];
 
-	root = json_load_file(path, &err, &eoff);
-	if (!root) {
-		fprintf(stderr, "warning: ignoring config file %s: %s "
-			"(byte %zu)\n", path, err, eoff);
+		if (legacy_json_path(path, legacy, sizeof(legacy)) == 0 &&
+		    stat(legacy, &st) == 0)
+			fprintf(stderr, "warning: %s is v1 JSON and is no "
+				"longer loaded; run 'lg-magic config migrate' "
+				"to convert it\n", legacy);
 		return;
 	}
-	if (root->type != JSON_OBJ) {
-		fprintf(stderr, "warning: ignoring config file %s: "
-			"root is not an object\n", path);
-		json_free(root);
+
+	root = toml_load_file(path, &err, &err_line);
+	if (!root) {
+		fprintf(stderr, "warning: ignoring config file %s: %s "
+			"(line %zu)\n", path, err ? err : "parse error",
+			err_line);
 		return;
 	}
 	for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
-		set_from_value(cfg, keys[i], json_obj_get(root, keys[i]));
-	json_free(root);
+		set_from_value(cfg, keys[i], toml_table_get_short(root, keys[i]));
+	toml_free(root);
 }
 
 static void set_defaults(struct config *cfg)
@@ -195,12 +216,26 @@ struct config *config_load(const char *extra_path)
 	if (home) {
 		char path[4096];
 
-		snprintf(path, sizeof(path), "%s%s/config.json", home,
+		snprintf(path, sizeof(path), "%s%s/config.toml", home,
 			 CFG_USER_DIR);
 		merge_file(cfg, path);
 	}
 	if (extra_path)
 		merge_file(cfg, extra_path);
+	return cfg;
+}
+
+struct config *config_load_daemon(const char *config_root)
+{
+	struct config *cfg = calloc(1, sizeof(*cfg));
+	char path[4096];
+
+	if (!cfg)
+		return NULL;
+	explicit_mask = 0;
+	set_defaults(cfg);
+	snprintf(path, sizeof(path), "%s/config.toml", config_root);
+	merge_file(cfg, path);
 	return cfg;
 }
 
@@ -244,8 +279,8 @@ static int mkdir_p(const char *dir)
 int config_save_user(struct config *cfg, char *err, size_t errsz)
 {
 	const char *home = getenv("HOME");
-	char dir[4096], path[sizeof(dir) + sizeof("/config.json")];
-	struct json_value *root;
+	char dir[4096], path[sizeof(dir) + sizeof("/config.toml")];
+	struct toml_value *root;
 	char *text;
 	FILE *f;
 
@@ -254,14 +289,14 @@ int config_save_user(struct config *cfg, char *err, size_t errsz)
 		return -1;
 	}
 	snprintf(dir, sizeof(dir), "%s%s", home, CFG_USER_DIR);
-	snprintf(path, sizeof(path), "%s/config.json", dir);
+	snprintf(path, sizeof(path), "%s/config.toml", dir);
 	if (mkdir_p(dir) < 0) {
 		snprintf(err, errsz, "cannot create %s: %s", dir,
 			 strerror(errno));
 		return -1;
 	}
 
-	root = json_new(JSON_OBJ);
+	root = toml_new_table();
 	if (!root)
 		goto oom;
 	{
@@ -284,27 +319,27 @@ int config_save_user(struct config *cfg, char *err, size_t errsz)
 		size_t i;
 
 		for (i = 0; i < sizeof(kvs) / sizeof(kvs[0]); i++) {
-			struct json_value *v;
+			struct toml_value *v;
 
 			if (kvs[i].is_str) {
 				const char *s = kvs[i].val;
 
-				v = json_new_str(s ? s : "");
+				v = toml_new_str(s ? s : "");
 				if (!v)
 					goto oom_free_root;
 			} else {
-				v = json_new_num(*(const double *)kvs[i].val);
+				v = toml_new_float(*(const double *)kvs[i].val);
 				if (!v)
 					goto oom_free_root;
 			}
-			if (json_obj_add(root, kvs[i].key, v) < 0) {
-				json_free(v);
+			if (toml_table_add(root, kvs[i].key, v) < 0) {
+				toml_free(v);
 				goto oom_free_root;
 			}
 		}
 	}
-	text = json_dumps(root);
-	json_free(root);
+	text = toml_dumps(root);
+	toml_free(root);
 	if (!text)
 		goto oom;
 	f = fopen(path, "w");
@@ -323,7 +358,7 @@ int config_save_user(struct config *cfg, char *err, size_t errsz)
 	return 0;
 
 oom_free_root:
-	json_free(root);
+	toml_free(root);
 oom:
 	snprintf(err, errsz, "out of memory");
 	return -1;
@@ -441,6 +476,6 @@ void config_print_paths(void)
 	const char *home = getenv("HOME");
 
 	printf("system: %s\n", CFG_SYSTEM_PATH);
-	printf("user:   %s%s/config.json\n", home ? home : "$HOME",
+	printf("user:   %s%s/config.toml\n", home ? home : "$HOME",
 	       CFG_USER_DIR);
 }

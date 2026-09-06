@@ -2,22 +2,22 @@
  *
  * test_config.c - unit tests for the user configuration (config.h).
  *
- * Precedence: built-in defaults < /etc/lg-magic/config.json <
- * ~/.config/lg-magic/config.json < --config FILE.  The test points HOME at
+ * Precedence: built-in defaults < /etc/lg-magic/config.toml <
+ * ~/.config/lg-magic/config.toml < --config FILE.  The test points HOME at
  * a scratch directory so it never touches (or depends on) the real user
  * config, and uses a scratch extra_path for the --config slot.  Only a
- * system-wide /etc/lg-magic/config.json on the host would leak in (there
+ * system-wide /etc/lg-magic/config.toml on the host would leak in (there
  * is no way to override that slot); the tests assume none is present.
  *
  * Covers:
  *  - built-in defaults and "not explicit" after config_load(NULL);
  *  - config_set_key: numeric/string keys, unknown key and bad value -> -1,
  *    explicit tracking;
- *  - config_save_user writes ~/.config/lg-magic/config.json and a fresh
+ *  - config_save_user writes ~/.config/lg-magic/config.toml and a fresh
  *    config_load(NULL) picks it up and marks the keys explicit;
  *  - extra_path overrides the user file; unknown keys in any file are
  *    ignored; a malformed file is skipped with a warning (defaults kept);
- *  - round-trip through the saved JSON file preserves values.
+ *  - round-trip through the saved TOML file preserves values.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,7 +25,7 @@
 
 #include "test_util.h"
 #include "config.h"
-#include "json.h"
+#include "toml.h"
 
 static char scratch[4096];	/* temp HOME directory */
 
@@ -105,10 +105,10 @@ static void test_save_load_user(void)
 	struct config *cfg2;
 	char err[256];
 	char path[sizeof(scratch) + 64];
-	struct json_value *root;
-	const char *jerr = NULL;
-	size_t eoff = 0;
-	struct json_value *v;
+	struct toml_value *root;
+	const char *terr = NULL;
+	size_t line = 0;
+	struct toml_value *v;
 
 	CHECK(cfg != NULL, "config_load(NULL) succeeds for save tests");
 	if (!cfg)
@@ -123,24 +123,24 @@ static void test_save_load_user(void)
 	      "config_save_user writes the user config");
 	config_free(cfg);
 
-	snprintf(path, sizeof(path), "%s/.config/lg-magic/config.json",
+	snprintf(path, sizeof(path), "%s/.config/lg-magic/config.toml",
 		 scratch);
-	CHECK(fopen(path, "rb") != NULL, "~/.config/lg-magic/config.json "
+	CHECK(fopen(path, "rb") != NULL, "~/.config/lg-magic/config.toml "
 	       "exists after saving");
-	root = json_load_file(path, &jerr, &eoff);
-	CHECK(root != NULL, "saved user config is valid JSON");
+	root = toml_load_file(path, &terr, &line);
+	CHECK(root != NULL, "saved user config is valid TOML");
 	if (root) {
-		v = json_obj_get(root, "lpf_alpha");
-		CHECK(v && v->type == JSON_NUM && v->num == 0.35,
+		v = toml_table_get_short(root, "lpf_alpha");
+		CHECK(v && v->type == TOML_FLOAT && v->d == 0.35,
 		      "saved lpf_alpha == 0.35");
-		v = json_obj_get(root, "imu_device");
-		CHECK(v && v->type == JSON_STR &&
+		v = toml_table_get_short(root, "imu_device");
+		CHECK(v && v->type == TOML_STR &&
 		      strcmp(v->str, "/dev/input/event9") == 0,
 		      "saved imu_device string");
-		v = json_obj_get(root, "mouse_scale");
-		CHECK(v && v->type == JSON_NUM && v->num == 30.0,
+		v = toml_table_get_short(root, "mouse_scale");
+		CHECK(v && v->type == TOML_FLOAT && v->d == 30.0,
 		      "default numeric keys are saved too");
-		json_free(root);
+		toml_free(root);
 	}
 
 	/* a fresh load must now pick the file up (precedence: user file
@@ -171,12 +171,11 @@ static void test_extra_path(void)
 
 	/* --config file overrides the user file (0.35 < 0.7); unknown keys
 	 * are ignored */
-	snprintf(epath, sizeof(epath), "%s/extra.json", scratch);
+	snprintf(epath, sizeof(epath), "%s/extra.toml", scratch);
 	rc = tu_write_file(epath,
-			   "{\"lpf_alpha\": 0.7, \"mouse_k\": 0.9, "
-			   "\"bogus_key\": 12}",
-			   strlen("{\"lpf_alpha\": 0.7, \"mouse_k\": 0.9, "
-				  "\"bogus_key\": 12}"));
+			   "lpf_alpha = 0.7\nmouse_k = 0.9\nbogus_key = 12\n",
+			   strlen("lpf_alpha = 0.7\nmouse_k = 0.9\n"
+				  "bogus_key = 12\n"));
 	CHECK(rc == 0, "can write the --config file");
 	if (rc != 0)
 		return;
@@ -199,8 +198,8 @@ static void test_extra_path(void)
 		char bad[sizeof(scratch) + 64];
 		struct config *cfg2;
 
-		snprintf(bad, sizeof(bad), "%s/bad.json", scratch);
-		if (tu_write_file(bad, "{\"alpha\": ", 10) == 0) {
+		snprintf(bad, sizeof(bad), "%s/bad.toml", scratch);
+		if (tu_write_file(bad, "alpha = \n", 8) == 0) {
 			cfg2 = config_load(bad);
 			CHECK(cfg2 != NULL && cfg2->alpha == 0.2,
 			      "malformed config file is skipped, defaults kept");
@@ -215,9 +214,9 @@ static void test_extra_path(void)
 		char onlybad[sizeof(scratch) + 64];
 		struct config *cfg2;
 
-		snprintf(onlybad, sizeof(onlybad), "%s/onlybad.json", scratch);
-		if (tu_write_file(onlybad, "{\"totally_unknown\": 1}",
-				  strlen("{\"totally_unknown\": 1}")) == 0) {
+		snprintf(onlybad, sizeof(onlybad), "%s/onlybad.toml", scratch);
+		if (tu_write_file(onlybad, "totally_unknown = 1\n",
+				  strlen("totally_unknown = 1\n")) == 0) {
 			cfg2 = config_load(onlybad);
 			CHECK(cfg2 != NULL && cfg2->alpha == 0.2,
 			      "unknown keys in a config file are ignored");

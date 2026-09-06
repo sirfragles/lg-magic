@@ -29,16 +29,21 @@ static const char *usage_text =
 	"  imu         read the IMU via evdev: CSV, airmouse, AHRS, cube\n"
 	"  calibrate   fit accel/gyro calibration from an IMU CSV recording\n"
 	"  calib2bin   convert a calibration JSON to the 32-byte firmware blob\n"
-	"  config      show / change the configuration (JSON files, see below)\n"
+	"  config      show / change the configuration (TOML files, see below)\n"
 	"  setup       interactive wizard: configure, calibrate, install\n"
+	"  device      list connected remotes / show the daemon status\n"
+	"  profile     list / show / switch the active profile\n"
+	"  button      list / remap / reset the remote buttons\n"
+	"  scroll      adjust the wheel speed / airmouse sensitivity\n"
+	"  diagnose    print a report for bug reports (read-only)\n"
 	"\n"
 	"Global flags:\n"
 	"  --config FILE   extra config file (merged last, below CLI flags)\n"
 	"  --version       print version and exit\n"
 	"  --help          print this help and exit\n"
 	"\n"
-	"Configuration precedence: built-in defaults < /etc/lg-magic/config.json\n"
-	"< ~/.config/lg-magic/config.json < --config FILE < CLI flags.\n"
+	"Configuration precedence: built-in defaults < /etc/lg-magic/config.toml\n"
+	"< ~/.config/lg-magic/config.toml < --config FILE < CLI flags.\n"
 	"Run 'lg-magic <subcommand> --help' for subcommand options.\n";
 
 struct command {
@@ -54,6 +59,11 @@ static const struct command commands[] = {
 	{ "calib2bin", "convert calibration JSON to a firmware blob", cmd_calib2bin },
 	{ "config", "show / change the configuration", cmd_config },
 	{ "setup", "interactive configuration and calibration wizard", cmd_setup },
+	{ "device", "list devices / show the daemon status", cmd_device },
+	{ "profile", "list / show / switch profiles", cmd_profile },
+	{ "button", "list / remap / reset buttons", cmd_button },
+	{ "scroll", "wheel speed and airmouse sensitivity", cmd_scroll },
+	{ "diagnose", "print a report for bug reports", cmd_diagnose },
 };
 
 int main(int argc, char **argv)

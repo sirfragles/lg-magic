@@ -37,9 +37,13 @@ do { if (debug >= 1) dev_warn(dev, fmt, ##__VA_ARGS__); } while (0)
 #define lgmagic_dev_err(dev, fmt, ...) \
 do { dev_err(dev, fmt, ##__VA_ARGS__); } while (0)
 
+static int raw_only = 1;
+module_param(raw_only, int, 0644);
+MODULE_PARM_DESC(raw_only, "Raw decoder mode: buttons + REL_WHEEL only, no airmouse (default 1; lg-magicd processes the input)");
+
 static int airmouse = 1;
 module_param(airmouse, int, 0644);
-MODULE_PARM_DESC(airmouse, "Report mouse events");
+MODULE_PARM_DESC(airmouse, "Report mouse events (raw_only=0 only)");
 
 static int airmouse_threshold = 300;
 module_param(airmouse_threshold, int, 0644);
@@ -148,7 +152,7 @@ static int lgmagic_raw_event(struct hid_device *hdev, struct hid_report *report,
 				if (lg_btn_map[i].code == btn_code) {
 					u16 report_keycode = lg_btn_map[i].keycode;
 
-					if (lg_btn_map[i].code==LGMAGIC_CODE_WHEEL && drvdata->mode)
+					if (lg_btn_map[i].code==LGMAGIC_CODE_WHEEL && drvdata->mode && !raw_only)
 						report_keycode = BTN_LEFT;
 					else
 						drvdata->mode = 0;
@@ -163,7 +167,10 @@ static int lgmagic_raw_event(struct hid_device *hdev, struct hid_report *report,
 
 	if (wheel != 0)
 	{
-		if (drvdata->mode)
+		/* raw_only: the wheel is always the native REL_WHEEL detent
+		 * step - never key emulation (the v1 fallback path would make
+		 * it indistinguishable from the physical UP/DOWN buttons). */
+		if (raw_only || drvdata->mode)
 			input_report_rel(drvdata->input_hid, REL_WHEEL, wheel);
 		else
 		{
@@ -173,7 +180,7 @@ static int lgmagic_raw_event(struct hid_device *hdev, struct hid_report *report,
 		reporting = 1;
 	}
 
-	if (airmouse)
+	if (airmouse && !raw_only)
 	{
 		int bigmove = lgmagic_calc_mouse(&drvdata->calib, drvdata->gyro_acc, airmouse_threshold, imu, mouse);
 		if (bigmove)
@@ -194,7 +201,9 @@ static int lgmagic_raw_event(struct hid_device *hdev, struct hid_report *report,
 		input_sync(drvdata->input_hid);
 	}
 
-	if (!imu_evdev)
+	/* raw_only implies the IMU evdev - the daemon needs the raw IMU
+	 * stream to do airmouse in userspace. */
+	if (!imu_evdev && !raw_only)
 		return 0;
 
 	/* Report counter */
@@ -315,7 +324,7 @@ loaded:
 		input_set_abs_params(drvdata->input_imu, i, -32768, 32767, 4, 4);
 	}
 
-	if (imu_evdev)
+	if (imu_evdev || raw_only)
 	{
 		ret = input_register_device(drvdata->input_imu);
 		if (ret)

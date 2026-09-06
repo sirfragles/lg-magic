@@ -5,12 +5,13 @@ on:
     tags:
       - 'v*'
 
-# action-gh-release needs to create/update the Release and attach the .deb.
+# action-gh-release needs to create/update the Release and attach files.
 permissions:
   contents: write
 
 jobs:
-  release:
+  # Debian: test-gated build of the .deb on the Ubuntu runner.
+  deb:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,10 +23,10 @@ jobs:
             build-essential \
             linux-headers-$(uname -r) \
             linux-libc-dev \
-            dkms dh-dkms \
-            debhelper dpkg-dev fakeroot
+            libsystemd-dev pkg-config \
+            dkms debhelper dpkg-dev fakeroot
         # Same set as ci.yml; see that workflow for why each package is
-        # needed. The changelog version is fixed at 1.0-1, so no version
+        # needed. The changelog version follows the tag, so no version
         # parsing is required here.
 
       - name: Run the full test suite
@@ -34,9 +35,8 @@ jobs:
 
       - name: Clean build artifacts before packaging
         run: make clean
-        # Keep the CI's build artifacts (.o/.ko, the lg-magic binary) out
-        # of the module sources that debian/rules ships into
-        # /usr/src/lg-magic-1.0.
+        # Keep the CI's build artifacts (.o/.ko, the binaries) out of the
+        # module sources that debian/rules ships into /usr/src/lg-magic-2.0.
 
       - name: Build the Debian package
         run: dpkg-buildpackage -us -uc -b
@@ -48,7 +48,96 @@ jobs:
           mkdir -p dist
           cp ../lg-magic-dkms_*.deb dist/
 
-      - name: Attach the .deb to the GitHub Release
+      - name: Upload the .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lg-magic-dkms-deb
+          path: dist/lg-magic-dkms_*.deb
+          if-no-files-found: error
+
+  # Fedora: rpmbuild in a fedora container.
+  rpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            rpm-build gcc make systemd-devel systemd-rpm-macros pkgconf
+
+      - name: Build the rpm
+        run: |
+          mkdir -p ~/rpmbuild/{SOURCES,SPECS}
+          tar -czf ~/rpmbuild/SOURCES/lg-magic-2.0.tar.gz \
+            --exclude=.git --exclude='*.o' \
+            --exclude=tools/lg-magic --exclude=tools/lg-magicd \
+            --exclude=tools/tests/fake_devices \
+            --transform='s,^,lg-magic-2.0/,' .
+          cp rpm/lg-magic.spec ~/rpmbuild/SPECS/
+          rpmbuild -bb ~/rpmbuild/SPECS/lg-magic.spec
+
+      - name: Upload the .rpm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lg-magic-rpm
+          path: /root/rpmbuild/RPMS/*/lg-magic-2.0*.rpm
+          if-no-files-found: error
+
+  # Arch: makepkg in an Arch container as a non-root builder. dkms is
+  # AUR-only, so the package is built with --nodeps (AUR users get dkms
+  # through their helper).
+  arch:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: pacman -Sy --noconfirm --needed pkgconf systemd
+
+      - name: Build the package with makepkg (non-root builder)
+        run: |
+          useradd -m builder
+          mkdir -p /tmp/pkg/src
+          tar -czf /tmp/pkg/src/lg-magic-2.0.tar.gz \
+            --exclude=.git --exclude='*.o' \
+            --exclude=tools/lg-magic --exclude=tools/lg-magicd \
+            --exclude=tools/tests/fake_devices \
+            --transform='s,^,lg-magic-2.0/,' .
+          chown -R builder:builder "$GITHUB_WORKSPACE" /tmp/pkg
+          su builder -c '
+            set -e
+            # PKGDEST pins the package location - makepkg otherwise drops
+            # it next to the PKGBUILD (cwd), outside BUILDDIR.
+            export SRCDEST=/tmp/pkg/src PKGDEST=/tmp/pkg
+            cd "$GITHUB_WORKSPACE/arch"
+            BUILDDIR=/tmp/pkg makepkg -sf --noconfirm --nodeps
+          '
+
+      - name: Upload the package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lg-magic-arch
+          path: /tmp/pkg/lg-magic-2.0*.pkg.tar.zst
+          if-no-files-found: error
+
+  # Attach all three packages to the GitHub Release for the tag.
+  release:
+    needs: [deb, rpm, arch]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Attach the packages to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/lg-magic-dkms_*.deb
+          files: |
+            dist/lg-magic-dkms_*.deb
+            dist/lg-magic-2.0*.rpm
+            dist/lg-magic-2.0*.pkg.tar.zst

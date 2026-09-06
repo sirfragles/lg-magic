@@ -12,5 +12,10 @@ int cmd_calibrate(int argc, char **argv);
 int cmd_calib2bin(int argc, char **argv);
 int cmd_config(int argc, char **argv);
 int cmd_setup(int argc, char **argv);
+int cmd_device(int argc, char **argv);
+int cmd_profile(int argc, char **argv);
+int cmd_button(int argc, char **argv);
+int cmd_scroll(int argc, char **argv);
+int cmd_diagnose(int argc, char **argv);
 
 #endif /* LG_TOOLS_COMMANDS_H */

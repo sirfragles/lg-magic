@@ -2,9 +2,10 @@
 /*
  * config.h - lg-magic user configuration.
  *
- * Precedence: built-in defaults < /etc/lg-magic/config.json <
- * ~/.config/lg-magic/config.json < --config FILE < CLI flags.
- * Files are JSON, parsed with our own json.c.
+ * Precedence: built-in defaults < /etc/lg-magic/config.toml <
+ * ~/.config/lg-magic/config.toml < --config FILE < CLI flags.
+ * Files are TOML, parsed with our own toml.c (v1 JSON is converted with
+ * `lg-magic config migrate`).
  */
 #ifndef LG_TOOLS_CONFIG_H
 #define LG_TOOLS_CONFIG_H
@@ -26,9 +27,15 @@ struct config {
 /* Load the effective configuration (see precedence above).
  * extra_path (--config FILE) is merged last; may be NULL. */
 struct config *config_load(const char *extra_path);
+
+/* The daemon's config: ONLY <config_root>/config.toml on top of the
+ * defaults.  lg-magicd runs as root and never reads ~/.config (a root
+ * process must not read user files). */
+struct config *config_load_daemon(const char *config_root);
+
 void config_free(struct config *cfg);
 
-/* Save the effective config to ~/.config/lg-magic/config.json. */
+/* Save the effective config to ~/.config/lg-magic/config.toml. */
 int config_save_user(struct config *cfg, char *err, size_t errsz);
 
 /* Set one key by name (the names match the config file keys).

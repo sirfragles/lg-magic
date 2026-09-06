@@ -1,10 +1,11 @@
 # Testing lg-magic
 
-How the LG Magic Remote driver and its userspace tools are tested.
+How the LG Magic Remote driver, the daemon and the userspace tools are
+tested.
 
-There are four layers:
+There are five layers:
 
-1. **Portable unit tests** - the eight numeric/parse/IO modules under
+1. **Portable unit tests** - the fourteen numeric/parse/IO modules under
    `tools/`. They compile and run on any host with a C99 compiler (macOS
    included) via `make -C tools check`.
 2. **CLI smoke tests** - `tools/tests/cli_smoke.sh`, run automatically by
@@ -13,8 +14,13 @@ There are four layers:
 3. **Reference-data parity checks** - the C tools re-run the reference
    Python pipeline (`scripts/`) over the committed fixtures in `testdata/`
    and must agree with the committed reference outputs.
-4. **Integration / packaging / hardware checks** - need a Linux host with
-   the kernel driver, and finally the remote itself.
+4. **Fake-device end-to-end tests** - a uinput harness
+   (`tools/tests/fake_devices.c`) that plays the remote without hardware;
+   `tools/tests/daemon_e2e.sh` drives the whole daemon surface (bus,
+   polkit, mapping, profiles, calibration, scroll, airmouse, reconnect,
+   grab release). Needs root and `/dev/uinput`; runs in CI.
+5. **Packaging / hardware checks** - .deb/.rpm/Arch package gates in
+   containers, and finally the remote itself.
 
 Fixtures are committed on purpose: **a missing fixture is a test FAILURE,
 never a reason to embed invented golden data in a test.**
@@ -25,14 +31,14 @@ never a reason to embed invented golden data in a test.**
 
 ```sh
 cd tools
-make check          # build and run all test binaries
+make check          # build and run all 14 test binaries
 ```
 
 Each test binary prints one `PASS`/`FAIL` line per check, a
 `test_xxx: N passed, M failed` summary, and exits nonzero if anything
 failed. `make check` fails if any binary fails.
 
-Current state (all eight binaries green):
+Current state (all fourteen binaries green, 475 checks):
 
 | test binary            | module(s) under test                     | checks |
 |------------------------|------------------------------------------|-------:|
@@ -42,14 +48,21 @@ Current state (all eight binaries green):
 | `tests/test_madgwick`  | `src/madgwick.c`                         |      2 |
 | `tests/test_lm`        | `src/lm.c`                               |      9 |
 | `tests/test_calib_blob`| `src/calib.c` + `include/lg_magic_calib.h`|    27 |
-| `tests/test_config`    | `src/config.c`                           |     33 |
+| `tests/test_config`    | `src/config.c` (TOML)                    |     33 |
 | `tests/test_cube_math` | `src/cube.c`                             |     19 |
+| `tests/test_toml`      | `src/toml.c`                             |     50 |
+| `tests/test_keymap`    | `src/keymap.c`                           |     56 |
+| `tests/test_airmouse`  | `src/airmouse.c` (v1 parity)             |     18 |
+| `tests/test_profiles`  | `src/profiles.c`                         |     65 |
+| `tests/test_pairing`   | `src/pairing.c`                          |     30 |
+| `tests/test_dbus_client`| `src/dbus_client.c`                     |     61 |
 
 Notes and conventions:
 
 - Every test compiles against **all** portable sources
-  (`src/{matrix,json,csv,calib,madgwick,lm,cube,config}.c`), so an API
-  change in one module breaks every test that uses it - by design.
+  (`src/{matrix,json,csv,calib,madgwick,lm,cube,config,toml,keymap,
+  airmouse,profiles,pairing,dbus_client}.c`), so an API change in one
+  module breaks every test that uses it - by design.
 - Tests run with the working directory `tools/`; fixtures are found at
   `../testdata/` (the harness `tu_fixture_path()` also tries `testdata/`).
   Helper code is shared in `tests/test_util.h`.
@@ -58,8 +71,8 @@ Notes and conventions:
   `${TMPDIR:-/tmp}` via `tu_temp_path()`, removed on exit.
 - `test_config` points `HOME` at a scratch directory so the real user
   config is never touched. One assumption cannot be neutralised: the
-  system-wide `/etc/lg-magic/config.json` is read by `config_load()`, so
-  the test suite assumes **no `/etc/lg-magic/config.json` exists on the
+  system-wide `/etc/lg-magic/config.toml` is read by `config_load()`, so
+  the test suite assumes **no `/etc/lg-magic/config.toml` exists on the
   host**.
 - `test_madgwick` replays `../testdata/madgwick_ref.csv` (500 rows, 50 Hz
   recordings) through `madgwick_init()`/`madgwick_update_imu()` and
@@ -72,6 +85,15 @@ Notes and conventions:
 - `test_calib_blob` compile-time checks the blob layout
   (`_Static_assert`, 32 bytes, offsets 0/12/24/28) and byte-compares
   `calib_to_blob()` output against the golden `ref_calib.bin`.
+- `test_airmouse` asserts the v2 `airmouse.c` pipeline reproduces the v1
+  `imu --mouse` output **bit for bit** (LPF + scale, `int` truncation,
+  signs) on synthetic gyro frames - the v1-parity contract.
+- `test_dbus_client` marshals/unmarshals against golden bytes, exercises
+  the AUTH EXTERNAL handshake and full round-trips against a fake bus on
+  a unix socket, including chunked replies, oversized replies, rejected
+  auth and connection errors. The client is what `lg-magic` uses to talk
+  to `lg-magicd`, so it must work without linking libsystemd (asserted by
+  the CI `ldd` step).
 
 Adding a test: a new `tests/test_x.c` needs one explicit rule in
 `tools/Makefile` (pattern rules are avoided for BSD make).
@@ -91,18 +113,21 @@ The smoke script then covers:
 
 - top-level handling in `src/main.c`: `--help`/`-h` (usage on stdout,
   exit 0), no arguments (usage on stderr, exit 1), `--version`
-  (`lg-magic 1.0`), unknown subcommand, `--config FILE` argument handling
+  (`lg-magic 2.0`), unknown subcommand, `--config FILE` argument handling
   and the global-flag-in-any-position rule;
 - the documented contract that every subcommand (`analyze`, `imu`,
-  `calibrate`, `calib2bin`, `config`, `setup`) prints its own usage on
-  `--help` and exits 0;
+  `calibrate`, `calib2bin`, `config`, `setup`, `device`, `profile`,
+  `button`, `scroll`, `diagnose`) prints its own usage on `--help` and
+  exits 0;
 - the `config` subcommand end to end **against a scratch `HOME`** (it
   must never touch the real user config): defaults, `path`, `set` with
   save + reload round trip, error paths (unknown key, non-numeric value,
-  missing value, unknown argument, extra arguments);
+  missing value, unknown argument, extra arguments), and `migrate`
+  converting a v1 JSON fixture to TOML;
 - the `--config FILE` merge (extra file overrides the user file) with the
   flag in both positions, and a missing `--config` file being skipped
-  rather than fatal.
+  rather than fatal. v2 config files are TOML; `--config` with a v1 JSON
+  file is rejected with a pointer to `lg-magic config migrate`.
 
 On hosts where the binary does not exist (macOS, or Linux before the
 userspace build is complete) the script prints `SKIP` and exits 0 so
@@ -158,57 +183,147 @@ Checks that run on a Linux host with the full binary:
    are the ahrs "zero gyro" early-return rows, so they record the
    unchanged quaternion and every implementation agrees on them.
 
-## 4. Integration tests without hardware (Linux)
+## 4. Fake-device end-to-end tests (Linux, no hardware)
 
-Once the kernel module and `lg-magic` build, and **before** touching real
-hardware, exercise the driver end to end with a virtual IMU:
+`tools/tests/fake_devices.c` creates a uinput keyboard named
+`LG Magic Remote` (vendor/product 0x000f:3412) and a uinput ABS device
+named `LG Magic Remote IMU` - the exact devices the daemon pairs and
+grabs. Two drivers run the assertions:
 
-1. Create a fake uinput device whose name contains `IMU` (the driver and
-   tools auto-detect the IMU input device by name; the real device is
-   `LG Magic Remote IMU`). `scripts/uinput_mouse.py` shows the
-   `python-uinput` API to copy; emit synthetic accel/gyro events in the
-   axis layout documented in `kernel/lg_magic_airmouse.h`.
-2. `lg-magic imu --csv` must stream CSV rows
-   (`counter,dt,ax,ay,az,gx,gy,gz`, dt empty when the sample interval is
-   unknown) that match the injected events; `--ahrs` must fuse them into
-   a stable orientation, and `--mouse` must move the pointer for nonzero
-   gyro and stay still at rest. Exact flags per `lg-magic imu --help`.
-3. Capture a HID report stream and decode it with `lg-magic analyze`,
-   comparing against `python3 scripts/lg_magic.py` on the same bytes.
+- `tools/tests/daemon_e2e.sh` - the **full bus + polkit e2e**. Needs root,
+  `/dev/uinput`, `dbus-daemon` and `polkitd`; starts a throwaway system
+  bus, installs the policy files, runs `lg-magicd` and asserts:
+  - `lg-magic device list` / `device status` render as root **and as
+    `nobody`** - read-only methods stay polkit-free for everyone;
+  - `button map` as root maps `KEY_UP -> KEY_VOLUMEUP` and the fake
+    remote's KEY_UP then arrives at `lg-magicd keyboard` as KEY_VOLUMEUP
+    **immediately, without a daemon restart**; the same call as `nobody`
+    is **denied** (polkit `org.lgmagic.modify-input`), and so is
+    `profile set` as `nobody` (`org.lgmagic.profile-set`);
+  - `profile set` updates `/var/lib/lg-magic/state.toml` and changes the
+    active map/scroll through the daemon;
+  - scroll: a wheel byte of +2 at `scroll_speed 2.0` yields REL_WHEEL 4
+    (+480 on REL_WHEEL_HI_RES) on `lg-magicd mouse`;
+  - calibration: a calib JSON in /var/lib + `Reload()` takes effect
+    (airmouse behaviour changes); a **broken calib JSON is rejected** -
+    the daemon logs the failure, keeps the previous calibration and
+    stays alive;
+  - airmouse: nonzero gyro moves `lg-magicd mouse` with the v1 signs;
+    at rest there is no motion;
+  - reconnect: destroying and recreating the fake device is rediscovered;
+  - grab release: `kill -9` on the daemon releases EVIOCGRAB - raw
+    events flow to an ordinary reader again; the same check repeats after
+    **SIGTERM and SIGINT** (the daemon is restarted between the checks);
+  - standalone `lg-magic imu --csv --device <fake IMU>` streams in
+    parallel (the IMU is never grabbed).
+- `tools/tests/daemon_e2e_busless.sh` - the pipeline assertions without a
+  bus (used on machines without polkitd).
 
-## 5. Packaging test (Linux container)
+Both scripts **SKIP (exit 0)** when a prerequisite is missing - the CI
+runner must have uinput, which is the main risk (reported by the SKIP
+line in the log).
 
-Run in a clean Debian/Ubuntu container (a Linux container keeps the
-dkms/kernel steps off the developer host):
+## 5. Packaging gates (Linux containers)
 
-```sh
-dpkg-buildpackage -us -uc -b     # build the .deb
-# in a second clean container:
-dpkg -i ../lg-magic_1.0_*.deb
-```
+Each distro package is built and sanity-checked in a clean container:
 
-Verify: the package installs without errors; the dkms module source is
-present at `/usr/src/lg-magic-1.0` and `dkms add/build/install` succeed
-(`lg_magic` lands in `/kernel/drivers/input/misc`); the udev rule
-(`51-lgimu.rules`) is installed and `udevadm control --reload` +
-`udevadm trigger` complete without errors; `lg-magic --version` works;
-and `dpkg -P lg-magic` purges everything, including the dkms module
-registration.
+- **Debian/Ubuntu**: `dpkg-buildpackage -us -uc -b`, then `dpkg -i` in a
+  fresh container. The postinst runs `dkms add/build/install` with every
+  step **best-effort** (`|| true`): a machine without matching kernel
+  headers (or with Secure Boot rejecting the unsigned module) must still
+  get a clean install - `dkms status` then shows `lg-magic/2.0: added`.
+  With headers present the module builds and `dkms status` shows
+  `installed`. Verify installed files (`/usr/bin/lg-magic`,
+  `/usr/libexec/lg-magicd`, the unit, policy, dbus conf, tmpfiles,
+  `config.toml`, the udev rule, `/usr/src/lg-magic-2.0/dkms.conf`) and
+  the `ldd` split: `lg-magic` without libsystemd, `lg-magicd` with it.
+- **Fedora**: `rpmbuild -bb rpm/lg-magic.spec` in a fedora container
+  (Source0 pre-seeded with a snapshot tarball before the v2.0 tag
+  exists); `rpm -qlp` content checks. Same best-effort DKMS policy in
+  `%post`. Note: DKMS on Fedora needs a matching `kernel-devel` on the
+  target machine.
+- **Arch**: `makepkg -sf --noconfirm --nodeps` in an
+  `archlinux:base-devel` container **as a non-root builder** (dkms is
+  AUR-only, hence `--nodeps`); `tar -tf` content checks plus the
+  `ExecStart=/usr/lib/lg-magicd` assertion (Arch has no /usr/libexec).
+  On arm64 hosts use the `lopsided/archlinux:devel` image and
+  `DisableSandbox` in pacman.conf (pacman 7 Landlock vs the Apple
+  container VM).
+
+CI runs all three (see `.github/workflows/ci.yml`); the release workflow
+attaches all three artifacts to the tag release.
 
 ## 6. Manual hardware checklist
 
-With the LG Magic Remote (MR20) paired over Bluetooth:
+With the LG Magic Remote (MR20) paired over Bluetooth. The acceptance
+criteria split into two stages: **v1 - compatibility with the current
+driver** (points 1-5) and **v2 - the daemon and target architecture**
+(points 6-12). Point 8 (immediate map), the grab-release half of 10, the
+read-only half of 11 and the invalid-calibration rejection are also
+covered automatically by `daemon_e2e.sh` (section 4); the rest need the
+real remote.
+
+**Definition of done:** the remote works standalone without the daemon;
+the daemon only *adds* airmouse, profiles, mapping, calibration and
+diagnostics.
+
+### Stage v1 - compatibility with the current driver
 
 ```sh
-sudo lg-magic setup          # wizard: configure, calibrate, install
+sudo lg-magic setup          # wizard: mode choice, configure, calibrate, install
 ```
 
-1. `setup` finds the remote and both input devices.
-2. Air-mouse mode: the pointer tracks hand motion, gyro rest drift is
-   small, and the buttons still click.
-3. Cube mode: the cube rotates with the remote; **Ctrl+C restores the
-   system cursor** (no stuck grab).
-4. The driver logs `Loading LG Magic calibration` (`dmesg`) when a
-   calibration blob is loaded.
-5. `lg-magic analyze` output matches `python3 scripts/lg_magic.py`
-   decoding the same report stream.
+1. **Setup and upgrade.** `setup` finds the remote and both input
+   devices and offers the mode choice (daemon = v2 default `raw_only=1
+   imu_evdev=1`, kernel airmouse = v1 behaviour `raw_only=0 airmouse=1`).
+   The v1 flows survive either mode.
+2. **Buttons decode identically to v1.** Every physical key arrives
+   with the same keycodes (the static `lg_btn_map` decode is
+   mode-independent) - check with `evtest` or `lg-magic analyze`.
+3. **Wheel.** In daemon mode scroll arrives as `REL_WHEEL` from the
+   kernel device; with `raw_only=0` the v1 behaviour (key emulation /
+   BTN_LEFT in airmouse mode) is unchanged.
+4. **IMU + v1 tools.** The IMU evdev device is present; `analyze`,
+   `imu --csv`, `calibrate` and `calib2bin` work as in v1 (blob
+   byte-compatible, airmouse output parity).
+5. **Decoder parity on a saved trace.** Record **one** HID trace from
+   the remote once, e.g.
+   `sudo cat /dev/hidrawN > /tmp/trace.bin` while pressing a fixed
+   sequence of buttons and wheel notches. Replay the **same file**
+   through the v1 decode (module loaded with `raw_only=0`) and the v2
+   decode (`raw_only=1`) - e.g. with a uhid replayer feeding the
+   recorded reports - and diff the evdev outputs: keys and wheel must
+   match exactly; only airmouse motion may differ (v1 emits REL_X/REL_Y,
+   raw_only does not). Never compare two parallel live reads - both
+   decoders must see the identical bytes.
+
+### Stage v2 - the daemon and target architecture
+
+6. **Takeover order.** The wizard enables `lg-magicd`; the daemon
+   creates the uinput mouse and keyboard **before** taking EVIOCGRAB.
+   Restarting the daemon must never leave the remote dead.
+7. **Airmouse through the daemon.** The pointer tracks hand motion with
+   the v1 signs/scale; gyro rest drift is small; buttons keep clicking.
+8. **Immediate profile / map.** `profile set` and `button map` change
+   behaviour at once - **without restarting the daemon**.
+9. **Scroll speed / sensitivity.** `scroll speed` and `sensitivity`
+   changes are applied immediately too.
+10. **Fallback without the daemon (the key safety condition).** With
+    `raw_only=1` and the daemon dead - `systemctl stop`, SIGINT, SIGTERM
+    or a crash - the remote keeps working from the kernel: buttons and
+    wheel flow straight from the kernel evdev device, only the airmouse
+    rests until the daemon returns. EVIOCGRAB must be released on every
+    exit path.
+11. **polkit model.** Read-only methods (`device list`/`status`,
+    `profile list`) work without any authorization for any user. From an
+    active desktop session `lg-magic profile set <MAC> tv` succeeds
+    **without** a password prompt (`org.lgmagic.profile-set`,
+    `allow_active=yes`), while `lg-magic button map …` may ask
+    (`org.lgmagic.modify-input`, `auth_admin_keep`). From a
+    non-graphical session both are denied. (Cannot be automated in CI -
+    no login session there; the root/nobody halves are in the e2e.)
+12. **Diagnostics.** `device list`/`status` render without sudo;
+    `lg-magic analyze` still decodes reports in parallel with the daemon
+    (nothing is consumed); `lg-magic diagnose` collects version, uname,
+    dmesg, module parameters, devices, config and daemon status into a
+    report for issues.

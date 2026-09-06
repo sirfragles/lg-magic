@@ -27,6 +27,14 @@ if [ ! -x "$BIN" ]; then
 	exit 0
 fi
 
+# A leftover binary from an older checkout (e.g. a v1 build) would fail
+# every check below.  Skip unless it really is a fresh v2 binary.
+if ! "$BIN" --version 2>/dev/null | grep -q '2\.0'; then
+	echo "SKIP tests/cli_smoke.sh: $BIN is not a v2 binary"
+	echo "  (stale build? rebuild with make -C tools on Linux)"
+	exit 0
+fi
+
 TMP=${TMPDIR:-/tmp}/lgmagic-cli-smoke-$$
 mkdir -p "$TMP/home"
 trap 'rm -rf "$TMP"' 0 1 2 3 15
@@ -163,7 +171,7 @@ fi
 
 HOME="$TMP/home" "$BIN" config path >"$TMP/out" 2>"$TMP/err"
 rc=$?
-grep -q "user:   $TMP/home/.config/lg-magic/config.json" "$TMP/out" &&
+grep -q "user:   $TMP/home/.config/lg-magic/config.toml" "$TMP/out" &&
 	pass "config path reports the scratch user file" ||
 	fail "config path reports the scratch user file (rc=$rc)"
 
@@ -174,9 +182,9 @@ if [ "$rc" -eq 0 ] && grep -q '^lpf_alpha = 0.35$' "$TMP/out"; then
 else
 	fail "config set echoes 'lpf_alpha = 0.35' (rc=$rc)"
 fi
-[ -f "$TMP/home/.config/lg-magic/config.json" ] &&
-	pass "config set wrote ~/.config/lg-magic/config.json" ||
-	fail "config set wrote ~/.config/lg-magic/config.json"
+[ -f "$TMP/home/.config/lg-magic/config.toml" ] &&
+	pass "config set wrote ~/.config/lg-magic/config.toml" ||
+	fail "config set wrote ~/.config/lg-magic/config.toml"
 
 HOME="$TMP/home" "$BIN" config >"$TMP/out" 2>"$TMP/err"
 rc=$?
@@ -196,23 +204,66 @@ HOME="$TMP/home" "$BIN" config show extra >"$TMP/out" 2>"$TMP/err"
 check_rc "config show with extra arguments exits 1" 1 $?
 
 # ----------------------------------------------------------------------
+# config migrate: v1 JSON -> TOML, the JSON source is kept
+# ----------------------------------------------------------------------
+
+printf '%s\n' '{"lpf_alpha": 0.4, "mouse_k": 0.9, "bogus": 1}' >"$TMP/mig.json"
+
+HOME="$TMP/home" "$BIN" config migrate "$TMP/mig.json" >"$TMP/out" 2>"$TMP/err"
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q "migrated $TMP/mig.json -> $TMP/mig.toml" "$TMP/out"; then
+	pass "config migrate converts a v1 JSON file"
+else
+	fail "config migrate converts a v1 JSON file (rc=$rc)"
+fi
+if [ -f "$TMP/mig.toml" ] &&
+	grep -q '^lpf_alpha = 0.4$' "$TMP/mig.toml" &&
+	grep -q '^mouse_k = 0.9$' "$TMP/mig.toml" &&
+	! grep -q 'bogus' "$TMP/mig.toml"; then
+	pass "migrated TOML has the known keys and drops unknown ones"
+else
+	fail "migrated TOML has the known keys and drops unknown ones"
+fi
+[ -f "$TMP/mig.json" ] && pass "migrate keeps the JSON source" ||
+	fail "migrate keeps the JSON source"
+
+HOME="$TMP/home" "$BIN" config migrate "$TMP/mig.json" >"$TMP/out" 2>"$TMP/err"
+rc=$?
+grep -q 'already exists' "$TMP/out" && [ "$rc" -eq 0 ] &&
+	pass "a second migrate skips the existing .toml" ||
+	fail "a second migrate skips the existing .toml (rc=$rc)"
+
+# bare 'config migrate': the user file is already TOML, nothing to do
+HOME="$TMP/home" "$BIN" config migrate >"$TMP/out" 2>"$TMP/err"
+check_rc "bare 'config migrate' is a no-op here, exit 0" 0 $?
+
+# a leftover v1 JSON next to a MISSING .toml produces a migrate hint
+mkdir -p "$TMP/home2/.config/lg-magic"
+printf '%s\n' '{"lpf_alpha": 0.4}' >"$TMP/home2/.config/lg-magic/config.json"
+HOME="$TMP/home2" "$BIN" config >"$TMP/out" 2>"$TMP/err"
+grep -q 'config migrate' "$TMP/err" &&
+	pass "a leftover v1 JSON produces a migrate hint on stderr" ||
+	fail "a leftover v1 JSON produces a migrate hint on stderr"
+rm -rf "$TMP/home2"
+
+# ----------------------------------------------------------------------
 # Global --config FILE: merged after the user file, in either position
 # ----------------------------------------------------------------------
 
-printf '%s\n' '{"mouse_k": 0.9}' >"$TMP/extra.json"
+printf '%s\n' 'mouse_k = 0.9' >"$TMP/extra.toml"
 
-"$BIN" --config "$TMP/extra.json" config >"$TMP/out" 2>"$TMP/err"
+"$BIN" --config "$TMP/extra.toml" config >"$TMP/out" 2>"$TMP/err"
 rc=$?
 grep -q 'mouse_k' "$TMP/out" && grep -q '0.9' "$TMP/out" &&
 	pass "--config FILE (before the command) overrides mouse_k" ||
 	fail "--config FILE (before the command) overrides mouse_k (rc=$rc)"
 
-"$BIN" config --config "$TMP/extra.json" >"$TMP/out" 2>"$TMP/err"
+"$BIN" config --config "$TMP/extra.toml" >"$TMP/out" 2>"$TMP/err"
 rc=$?
 grep -q '0.9' "$TMP/out" && pass "--config FILE after the command works too" ||
 	fail "--config FILE after the command works too (rc=$rc)"
 
-"$BIN" --config "$TMP/does-not-exist.json" config >"$TMP/out" 2>"$TMP/err"
+"$BIN" --config "$TMP/does-not-exist.toml" config >"$TMP/out" 2>"$TMP/err"
 check_rc "a missing --config file is skipped, not fatal" 0 $?
 
 echo "cli_smoke: $ok passed, $bad failed"

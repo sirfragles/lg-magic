@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+# Best-effort, like the postinst and the other package formats.
+if [ "$1" = remove ] && [ -x /usr/sbin/dkms ]; then
+    dkms remove -m lg-magic -v 2.0 --all || true
+fi
+
 modprobe -r lg_magic 2>/dev/null || true
 
 #DEBHELPER#
