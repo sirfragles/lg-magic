@@ -385,7 +385,9 @@ static int handle_kbd(struct daemon_remote *r,
 		if (f.nkeys || f.wheel)
 			log_debug(dd, "keyboard frame from %s: %d keys, wheel %d",
 				  r->identity, f.nkeys, f.wheel);
-		pipeline_keyboard(&r->pl, &f, kbd_uinput, mouse_uinput);
+		if (pipeline_keyboard(&r->pl, &f, kbd_uinput, mouse_uinput) < 0)
+			log_info("uinput write for %s failed: %s", r->identity,
+				 strerror(errno));
 		return 1;
 	}
 	if (g_stop)
@@ -406,7 +408,9 @@ static int handle_imu(struct daemon_remote *r,
 
 	rv = evdev_read_frame_ext(&r->imu, &f, err, sizeof(err));
 	if (rv == 1) {
-		pipeline_imu(&r->pl, &f, mouse_uinput);
+		if (pipeline_imu(&r->pl, &f, mouse_uinput) < 0)
+			log_info("uinput write for %s (mouse) failed: %s",
+				 r->identity, strerror(errno));
 		return 1;
 	}
 	if (g_stop)

@@ -61,10 +61,10 @@ int pipeline_configure(struct pipeline *p, const struct device_config *dc,
 	return 0;
 }
 
-void pipeline_keyboard(struct pipeline *p, const struct evdev_frame *f,
-		       int kbd_fd, int mouse_fd)
+int pipeline_keyboard(struct pipeline *p, const struct evdev_frame *f,
+		      int kbd_fd, int mouse_fd)
 {
-	int i;
+	int i, rc = 0;
 
 	for (i = 0; i < f->nkeys; i++) {
 		int to = f->keys[i].code;
@@ -76,7 +76,8 @@ void pipeline_keyboard(struct pipeline *p, const struct evdev_frame *f,
 				break;
 			}
 		}
-		uinput_key(kbd_fd, to, f->keys[i].value);
+		if (uinput_key(kbd_fd, to, f->keys[i].value) < 0)
+			rc = -1;
 	}
 
 	/* Wheel: fractional accumulator, integer clicks out (C cast
@@ -87,19 +88,20 @@ void pipeline_keyboard(struct pipeline *p, const struct evdev_frame *f,
 		p->wheel_accum += (double)f->wheel * p->active.scroll_speed;
 		clicks = (int)p->wheel_accum;
 		p->wheel_accum -= clicks;
-		if (clicks)
-			uinput_scroll(mouse_fd, clicks, clicks * 120);
+		if (clicks && uinput_scroll(mouse_fd, clicks, clicks * 120) < 0)
+			rc = -1;
 	}
+	return rc;
 }
 
-void pipeline_imu(struct pipeline *p, const struct evdev_frame *f,
-		  int mouse_fd)
+int pipeline_imu(struct pipeline *p, const struct evdev_frame *f,
+		 int mouse_fd)
 {
 	double a_raw[3], g_raw[3], a_out[3], g_out[3], filt[3];
 	int dx, dy;
 
 	if (!p->airmouse_on)
-		return;
+		return 0;
 	a_raw[0] = f->accel[0];
 	a_raw[1] = f->accel[1];
 	a_raw[2] = f->accel[2];
@@ -116,5 +118,6 @@ void pipeline_imu(struct pipeline *p, const struct evdev_frame *f,
 	}
 	airmouse_process(&p->am, g_out, filt, &dx, &dy);
 	if (dx || dy)
-		uinput_move(mouse_fd, dx, dy);
+		return uinput_move(mouse_fd, dx, dy) < 0 ? -1 : 0;
+	return 0;
 }

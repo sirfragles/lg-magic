@@ -265,6 +265,15 @@ grep -q "identity: unknown" "$TMP/status-nobody.out" || \
 echo "OK polkit-free reads as nobody"
 
 # ------------------------------------------------------------------ #
+# 1b. Harness self-test: injection through the evdev NODE must reach
+#     a watcher (the same node/queue/watcher path the checks below
+#     rely on - if this fails, the harness itself is broken).
+# ------------------------------------------------------------------ #
+
+expect_emit "harness self-test" "$OUTK" --kbd "$OUTK" --key KEY_ENTER \
+	"KEY KEY_ENTER 1" 1200
+
+# ------------------------------------------------------------------ #
 # 2. The file's default profile is live at startup                   #
 # ------------------------------------------------------------------ #
 

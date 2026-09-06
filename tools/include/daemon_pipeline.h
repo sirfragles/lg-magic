@@ -41,12 +41,14 @@ int pipeline_configure(struct pipeline *p, const struct device_config *dc,
 		       char *err, size_t errsz);
 
 /* One keyboard frame: map + emit keys on kbd_fd, accumulate the wheel
- * and emit whole clicks on mouse_fd. */
-void pipeline_keyboard(struct pipeline *p, const struct evdev_frame *f,
-		       int kbd_fd, int mouse_fd);
+ * and emit whole clicks on mouse_fd.  Returns 0, or -1 when a uinput
+ * write failed (errno set by the emitter). */
+int pipeline_keyboard(struct pipeline *p, const struct evdev_frame *f,
+		      int kbd_fd, int mouse_fd);
 
-/* One IMU frame: calibrate + airmouse; moves the mouse when enabled. */
-void pipeline_imu(struct pipeline *p, const struct evdev_frame *f,
-		  int mouse_fd);
+/* One IMU frame: calibrate + airmouse; moves the mouse when enabled.
+ * Returns 0, or -1 when a uinput write failed (errno set). */
+int pipeline_imu(struct pipeline *p, const struct evdev_frame *f,
+		 int mouse_fd);
 
 #endif /* LG_TOOLS_DAEMON_PIPELINE_H */

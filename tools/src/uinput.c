@@ -141,8 +141,11 @@ void uinput_close(int fd)
 
 static int uinput_write(int fd, const struct input_event *ev, size_t n)
 {
-	return write(fd, ev, n * sizeof(*ev)) == (ssize_t)(n * sizeof(*ev))
-		? 0 : -1;
+	if (write(fd, ev, n * sizeof(*ev)) == (ssize_t)(n * sizeof(*ev)))
+		return 0;
+	if (!errno)
+		errno = EIO;	/* short write - a partial event stream */
+	return -1;
 }
 
 int uinput_key(int fd, int code, int value)
