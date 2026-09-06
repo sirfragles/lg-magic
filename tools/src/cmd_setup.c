@@ -711,11 +711,14 @@ static void step_save_user_config(double alpha, double mouse_k)
 
 			snprintf(dir, sizeof(dir), "%s/.config", pw->pw_dir);
 			/* best effort: the files stay usable if this fails */
-			(void)chown(dir, pw->pw_uid, pw->pw_gid);
+			if (chown(dir, pw->pw_uid, pw->pw_gid) < 0) {
+			}
 			snprintf(dir, sizeof(dir), "%s/.config/lg-magic",
 				 pw->pw_dir);
-			(void)chown(dir, pw->pw_uid, pw->pw_gid);
-			(void)chown(path, pw->pw_uid, pw->pw_gid);
+			if (chown(dir, pw->pw_uid, pw->pw_gid) < 0) {
+			}
+			if (chown(path, pw->pw_uid, pw->pw_gid) < 0) {
+			}
 		}
 	}
 	if (saved_home)

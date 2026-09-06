@@ -104,7 +104,7 @@ static void test_save_load_user(void)
 	struct config *cfg = config_load(NULL);
 	struct config *cfg2;
 	char err[256];
-	char path[4096];
+	char path[sizeof(scratch) + 64];
 	struct json_value *root;
 	const char *jerr = NULL;
 	size_t eoff = 0;
@@ -165,9 +165,8 @@ static void test_save_load_user(void)
 
 static void test_extra_path(void)
 {
-	char epath[4096];
+	char epath[sizeof(scratch) + 64];
 	struct config *cfg;
-	char err[256];
 	int rc;
 
 	/* --config file overrides the user file (0.35 < 0.7); unknown keys
@@ -197,7 +196,7 @@ static void test_extra_path(void)
 
 	/* a malformed --config file is skipped with a warning */
 	{
-		char bad[4096];
+		char bad[sizeof(scratch) + 64];
 		struct config *cfg2;
 
 		snprintf(bad, sizeof(bad), "%s/bad.json", scratch);
@@ -213,7 +212,7 @@ static void test_extra_path(void)
 
 	/* a file with unknown keys only must load cleanly */
 	{
-		char onlybad[4096];
+		char onlybad[sizeof(scratch) + 64];
 		struct config *cfg2;
 
 		snprintf(onlybad, sizeof(onlybad), "%s/onlybad.json", scratch);

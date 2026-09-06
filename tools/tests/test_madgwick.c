@@ -178,7 +178,7 @@ int main(void)
 		}
 	}
 	if (fails)
-		printf("  (%ld of %ld rows mismatched)\n", fails, n);
+		printf("  (%d of %ld rows mismatched)\n", fails, n);
 	CHECK(fails == 0,
 	      "madgwick_update_imu matches the reference trace within 1e-6 "
 	      "(sign-tolerant)");

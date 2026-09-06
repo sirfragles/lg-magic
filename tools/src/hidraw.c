@@ -253,7 +253,7 @@ static int scan_remotes(int (*cb)(const char *path, void *ctx), void *ctx)
 	if (!dir)
 		return 0;
 	while ((de = readdir(dir)) != NULL) {
-		char path[256];
+		char path[sizeof(de->d_name) + 16];
 		struct hidraw_devinfo info;
 		int fd;
 

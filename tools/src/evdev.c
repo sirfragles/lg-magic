@@ -82,7 +82,7 @@ int evdev_find_imu(struct evdev_imu *dev, const char *wanted_path,
 		return -1;
 	}
 	while ((de = readdir(dir)) != NULL) {
-		char path[256];
+		char path[sizeof(de->d_name) + 16];
 
 		if (strncmp(de->d_name, "event", 5) != 0)
 			continue;
