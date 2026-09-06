@@ -12,7 +12,21 @@ modules.order
 *.csv
 *.bin
 
+# Userspace tools build artifacts
+tools/lg-magic
+tools/tests/test_*
+!tools/tests/*.c
+!tools/tests/*.h
+!tools/tests/*.sh
+
+# Test fixtures are committed on purpose
+!testdata/
+!testdata/*
+
 # Python artifacts
 __pycache__/
 *.py[codz]
 *$py.class
+
+# macOS
+.DS_Store
