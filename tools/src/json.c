@@ -768,6 +768,8 @@ struct json_value *json_load_file(const char *path, const char **err,
 		fclose(f);
 		if (err)
 			*err = "cannot read file";
+		if (err_off)
+			*err_off = 0;
 		return NULL;
 	}
 	buf = malloc((size_t)sz + 1);
@@ -775,6 +777,8 @@ struct json_value *json_load_file(const char *path, const char **err,
 		fclose(f);
 		if (err)
 			*err = "out of memory";
+		if (err_off)
+			*err_off = 0;
 		return NULL;
 	}
 	if (fread(buf, 1, (size_t)sz, f) != (size_t)sz) {
@@ -782,6 +786,8 @@ struct json_value *json_load_file(const char *path, const char **err,
 		free(buf);
 		if (err)
 			*err = "cannot read file";
+		if (err_off)
+			*err_off = 0;
 		return NULL;
 	}
 	fclose(f);

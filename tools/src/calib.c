@@ -42,8 +42,8 @@ void calib_init_identity(struct calib *c)
 int calib_load(const char *path, struct calib *c, char *err, size_t errsz)
 {
 	struct json_value *root, *accel, *gyro;
-	const char *perr;
-	size_t eoff;
+	const char *perr = NULL;
+	size_t eoff = 0;
 
 	calib_init_identity(c);
 	root = json_load_file(path, &perr, &eoff);
