@@ -30,3 +30,7 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# agent tooling receipts (not part of the project)
+receipts/
+review-receipts/
