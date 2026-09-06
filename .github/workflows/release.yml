@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# action-gh-release needs to create/update the Release and attach the .deb.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            linux-headers-$(uname -r) \
+            linux-libc-dev \
+            dkms dh-dkms \
+            debhelper dpkg-dev fakeroot
+        # Same set as ci.yml; see that workflow for why each package is
+        # needed. The changelog version is fixed at 1.0-1, so no version
+        # parsing is required here.
+
+      - name: Run the full test suite
+        run: make check
+        # Gate the release on the tools + unit tests + cli_smoke.sh.
+
+      - name: Clean build artifacts before packaging
+        run: make clean
+        # Keep the CI's build artifacts (.o/.ko, the lg-magic binary) out
+        # of the module sources dh_dkms ships into /usr/src/lg-magic-1.0.
+
+      - name: Build the Debian package
+        run: dpkg-buildpackage -us -uc -b
+        # Unsigned (-us -uc), binary-only (-b); the .deb lands in the
+        # PARENT directory (../lg-magic-dkms_*.deb).
+
+      - name: Stage the .deb inside the workspace
+        run: |
+          mkdir -p dist
+          cp ../lg-magic-dkms_*.deb dist/
+
+      - name: Attach the .deb to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/lg-magic-dkms_*.deb
