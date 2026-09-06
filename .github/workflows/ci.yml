@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# One run per ref at a time: a newer push/PR supersedes the running one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Linux: build the DKMS module and the C tools, run the full test suite,
+  # package the .deb, install it on the runner and sanity-check the result.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            linux-headers-$(uname -r) \
+            linux-libc-dev \
+            dkms dh-dkms \
+            debhelper dpkg-dev fakeroot
+        # linux-headers-$(uname -r): KDIR target for `make` and for the
+        #   dkms build triggered by the .deb install (runner kernels are
+        #   Azure-tuned but their headers are in the apt archive).
+        # linux-libc-dev: /usr/include/linux/{input,uinput,hidraw}.h for tools.
+        # dkms + dh-dkms: the dh "dkms" sequence (dh-dkms also provides the
+        #   virtual dh-sequence-dkms that debian/control Build-Depends on).
+        # debhelper: the `dh` driver (satisfies debhelper-compat (= 13));
+        # dpkg-dev: dpkg-buildpackage; fakeroot: debian/rules runs as the
+        #   non-root runner user.
+
+      - name: Build kernel module and tools
+        run: make
+        # `make` (all) compiles the module against
+        # /lib/modules/$(uname -r)/build - the same KDIR path DKMS uses,
+        # so a green build validates the DKMS build command in dkms.conf.
+
+      - name: Run the full test suite
+        run: make check
+        # Builds/runs the 8 unit-test binaries (plain C, exit-code based)
+        # and tests/cli_smoke.sh against the built lg-magic binary.
+
+      - name: Clean build artifacts before packaging
+        run: make clean
+        # debian/rules copies the module sources (Makefile, COPYING,
+        # kernel/, include/) into /usr/src/lg-magic-1.0 inside the .deb -
+        # keep the CI's .o/.ko files out of the shipped source tree.
+
+      - name: Build the Debian package
+        run: dpkg-buildpackage -us -uc -b
+        # Unsigned (-us -uc), binary-only (-b). Must run from the repo
+        # root; the .deb lands in the PARENT directory (../lg-magic-dkms_*.deb).
+
+      - name: Stage the .deb inside the workspace
+        run: |
+          mkdir -p dist
+          cp ../lg-magic-dkms_*.deb dist/
+
+      - name: Install the .deb on the runner
+        run: sudo dpkg -i dist/lg-magic-dkms_*.deb
+        # Simulates the clean-install flow without a container: postinst
+        # runs dh_dkms (dkms add/build/install for the running kernel) and
+        # reloads udev rules. dpkg -i must succeed - strict.
+
+      - name: Verify binary and udev rule (strict)
+        run: |
+          test -x /usr/bin/lg-magic
+          /usr/bin/lg-magic --version
+          test -f /etc/udev/rules.d/51-lgimu.rules
+          echo "OK: /usr/bin/lg-magic and udev rule installed"
+
+      - name: Check DKMS module state (tolerant)
+        run: |
+          # A headers/build mismatch on the Azure runner kernel must not
+          # fail CI: report the dkms state but keep this step green.
+          echo "== dkms status =="
+          dkms status || true
+          echo "== /usr/src/lg-magic-1.0 =="
+          ls -la /usr/src/lg-magic-1.0 || echo "warning: /usr/src/lg-magic-1.0 not found"
+          if dkms status 2>/dev/null | grep -q 'lg-magic/1.0'; then
+            echo "OK: lg-magic/1.0 registered in dkms"
+          else
+            echo "::warning::lg-magic/1.0 missing from 'dkms status' (see dkms output above)"
+          fi
+
+      - name: No-python-runtime guard (ldd)
+        run: |
+          # The tools must link only libc/libm - flag any leaked libpython.
+          echo "== ldd /usr/bin/lg-magic =="
+          ldd /usr/bin/lg-magic
+          if ldd /usr/bin/lg-magic | grep -qi 'libpython'; then
+            echo "::error::lg-magic links libpython - python dependency leaked in!"
+            exit 1
+          fi
+          echo "OK: no libpython in the link line (only libc/libm expected)"
+
+      - name: Upload the .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lg-magic-dkms-deb
+          path: dist/lg-magic-dkms_*.deb
+          retention-days: 30
+          if-no-files-found: error
+
+  # macOS: the tools' unit tests link only the portable C modules, so they
+  # must build and pass under clang too. The full binary and the kernel
+  # module are Linux-only by design, hence only `check` runs here.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run portable unit tests (clang)
+        run: make -C tools check
