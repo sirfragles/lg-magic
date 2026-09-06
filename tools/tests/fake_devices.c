@@ -398,17 +398,22 @@ static int cmd_emit(int argc, char **argv)
 
 static const char *code_name(__u16 type, __u16 code)
 {
-	const char *n = keymap_code_to_name(code);
-
-	if (n)
-		return n;
+	/* REL codes numerically collide with KEY_* codes (REL_X = 0,
+	 * REL_WHEEL = 8 = KEY_7, REL_WHEEL_HI_RES = 11 = KEY_0 ...) -
+	 * name them by type, never through the keymap. */
 	if (type == EV_REL) {
 		static const char *rel[] = {
 			"REL_X", "REL_Y", "REL_Z", "REL_RX", "REL_RY", "REL_RZ",
 			"REL_HWHEEL", "REL_DIAL", "REL_WHEEL", "REL_MISC",
+			"REL_RESERVED", "REL_WHEEL_HI_RES", "REL_HWHEEL_HI_RES",
 		};
 
 		return code < sizeof(rel) / sizeof(rel[0]) ? rel[code] : "?";
+	}
+	if (type == EV_KEY) {
+		const char *n = keymap_code_to_name(code);
+
+		return n ? n : "?";
 	}
 	return "?";
 }
