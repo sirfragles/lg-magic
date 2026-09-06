@@ -108,14 +108,26 @@ wait_for()
 	fail "$label: timeout waiting for '$want': $(cat "$file" 2>/dev/null)"
 }
 
-# watch OUT + emit on KBD + expect line; every check gets its OWN
+# watch OUT + emit + expect line; every check gets its OWN
 # output file and its watcher is killed afterwards (a stale watcher
 # writing into a later check's file would fake a pass)
 n_exp=0
 last_exp_file=
+# call convention: expect_emit LABEL OUT <emit flags> EXPECT MS - the
+# emit flags (e.g. --kbd PATH --key NAME) go verbatim to fake_devices,
+# the LAST two arguments are the grep pattern and the timeout. All emit
+# arguments are controlled literals (paths, KEY_*/REL_* names), so the
+# re-evaluation below is safe.
 expect_emit()
 {
-	label=$1; out=$2; device=$3; kind=$4; what=$5; expect=$6; ms=$7
+	label=$1; out=$2; shift 2
+
+	emit_args=
+	while [ $# -gt 2 ]; do
+		emit_args="$emit_args $1"
+		shift
+	done
+	expect=$1; ms=$2
 
 	f=$TMP/exp.$n_exp.out
 	n_exp=$((n_exp + 1))
@@ -123,7 +135,7 @@ expect_emit()
 	( "$FAKE" watch "$out" --ms "$ms" > "$f" 2>&1 ) &
 	wp=$!
 	sleep 0.1
-	"$FAKE" emit "$kind" "$device" $what
+	eval "\"$FAKE\" emit$emit_args"
 	sleep $((ms / 1000 + 1))
 	kill "$wp" 2>/dev/null || true
 	wait "$wp" 2>/dev/null || true
