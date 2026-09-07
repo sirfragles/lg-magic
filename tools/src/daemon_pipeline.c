@@ -45,13 +45,16 @@ int pipeline_configure(struct pipeline *p, const struct device_config *dc,
 	}
 
 	/* Calibration: reload on every (re)configure.  A broken file is an
-	 * error the caller logs, but the pipeline continues identity. */
-	p->have_cal = 0;
+	 * error the caller logs, but the PREVIOUS calibration stays live
+	 * (the e2e asserts exactly this: bad calib rejected, old one
+	 * kept); only an explicit "" path resets to identity. */
 	if (calib_path && calib_path[0]) {
 		if (calib_load(calib_path, &cal, err, errsz) < 0)
 			return -1;
 		p->cal = cal;
 		p->have_cal = 1;
+	} else {
+		p->have_cal = 0;
 	}
 
 	/* Air mouse: profile lpf_alpha when set, else the global config. */
