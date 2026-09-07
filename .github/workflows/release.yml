@@ -89,13 +89,14 @@ jobs:
           # the workspace and upload a last-segment-only glob instead
           # (the same pattern the deb job uses).
           mkdir -p dist
-          cp ~/rpmbuild/RPMS/*/lg-magic-*.rpm dist/
+          cp ~/rpmbuild/RPMS/*/lg-magic-[0-9]*.rpm dist/
 
       - name: Upload the .rpm artifact
         uses: actions/upload-artifact@v4
         with:
           name: lg-magic-rpm
-          path: dist/lg-magic-*.rpm
+          # [0-9] right after the dash: excludes lg-magic-debuginfo/debugsource.
+          path: dist/lg-magic-[0-9]*.rpm
           if-no-files-found: error
 
   # Arch: makepkg in an Arch container as a non-root builder. dkms is
@@ -136,7 +137,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lg-magic-arch
-          path: /tmp/pkg/lg-magic-*.pkg.tar.zst
+          # [0-9] right after the dash: excludes the lg-magic-debug package.
+          path: /tmp/pkg/lg-magic-[0-9]*.pkg.tar.zst
           if-no-files-found: error
 
   # Attach all three packages to the GitHub Release for the tag.
@@ -155,5 +157,5 @@ jobs:
         with:
           files: |
             dist/lg-magic-dkms_*.deb
-            dist/lg-magic-*.rpm
-            dist/lg-magic-*.pkg.tar.zst
+            dist/lg-magic-[0-9]*.rpm
+            dist/lg-magic-[0-9]*.pkg.tar.zst

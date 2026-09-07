@@ -215,7 +215,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lg-magic-rpm
-          path: dist/lg-magic-*.rpm
+          # [0-9] right after the dash: excludes lg-magic-debuginfo/debugsource.
+          path: dist/lg-magic-[0-9]*.rpm
           retention-days: 30
           if-no-files-found: error
 
@@ -281,7 +282,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lg-magic-arch
-          path: /tmp/pkg/lg-magic-*.pkg.tar.zst
+          # [0-9] right after the dash: excludes the lg-magic-debug package.
+          path: /tmp/pkg/lg-magic-[0-9]*.pkg.tar.zst
           retention-days: 30
           if-no-files-found: error
 
