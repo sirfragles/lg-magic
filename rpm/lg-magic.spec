@@ -9,7 +9,7 @@ Version:        2.0.1
 Release:        1%{?dist}
 Summary:        LG Magic Remote MR20 driver, daemon and tools
 License:        GPL-2.0-or-later
-URL:            https://github.com/sirfragles/lg-magic
+URL:            https://github.com/sirfragles/lgmagic
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  gcc

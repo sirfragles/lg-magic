@@ -144,7 +144,7 @@ libc/libm.
 ### 1. Пакеты релиза (рекомендуется)
 
 Скачайте пакет для своего дистрибутива с последнего
-[GitHub Release](https://github.com/sirfragles/lg-magic/releases):
+[GitHub Release](https://github.com/sirfragles/lgmagic/releases):
 
 ```bash
 # Ubuntu / Debian

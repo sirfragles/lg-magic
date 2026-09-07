@@ -5,7 +5,7 @@ Maintainer: Ilya Chelyadin <sirfragles@users.noreply.github.com>
 Build-Depends: debhelper-compat (= 13), gcc, make, libsystemd-dev,
  pkg-config
 Standards-Version: 4.6.2
-Homepage: https://github.com/sirfragles/lg-magic
+Homepage: https://github.com/sirfragles/lgmagic
 
 Package: lg-magic-dkms
 Architecture: linux-any

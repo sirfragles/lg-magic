@@ -136,7 +136,7 @@ The `lg-magic` binary itself needs nothing at runtime beyond libc/libm.
 ### 1. Release packages (recommended)
 
 Download the package for your distro from the latest
-[GitHub Release](https://github.com/sirfragles/lg-magic/releases):
+[GitHub Release](https://github.com/sirfragles/lgmagic/releases):
 
 ```bash
 # Ubuntu / Debian

@@ -5,7 +5,7 @@
 <policyconfig>
 
   <vendor>lg-magic</vendor>
-  <vendor_url>https://github.com/sirfragles/lg-magic</vendor_url>
+  <vendor_url>https://github.com/sirfragles/lgmagic</vendor_url>
 
   <!-- Two write actions cover the whole mutating surface of the daemon;
        all reads (ListDevices, GetStatus, the profile/button lists) stay
