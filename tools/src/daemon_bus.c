@@ -82,7 +82,7 @@ static void remote_apply(struct daemon_remote *r, struct daemon_devices *dd)
 				 sizeof(calib));
 	if (pipeline_configure(&r->pl, &r->dc, calib,
 			       dd->config->global->lpf_alpha,
-			       err, sizeof(err)) < 0)
+			       r->kbd_uinput, err, sizeof(err)) < 0)
 		fprintf(stderr, "lg-magicd: %s: %s\n", r->identity, err);
 }
 
@@ -339,6 +339,9 @@ static int method_get_status(sd_bus_message *m, void *userdata,
 	(void)ret_error;
 	if (sd_bus_message_read(m, "s", &mac) < 0)
 		return -EINVAL;
+	if (!daemon_identity_valid(mac))
+		return fail(m, LG_ERROR_INVALID_ARGUMENTS,
+			    "invalid device identity '%s'", mac);
 	r = find_remote(dd, mac);
 	if (!r)
 		return fail(m, LG_ERROR_NOT_FOUND, "no device '%s'", mac);
@@ -385,6 +388,9 @@ static int method_set_profile(sd_bus_message *m, void *userdata,
 		return -EINVAL;
 	if (gate(m, "org.lgmagic.profile-set"))
 		return 1;
+	if (!daemon_identity_valid(mac))
+		return fail(m, LG_ERROR_INVALID_ARGUMENTS,
+			    "invalid device identity '%s'", mac);
 	r = find_remote(dd, mac);
 	if (!r)
 		return fail(m, LG_ERROR_NOT_FOUND, "no device '%s'", mac);
@@ -442,6 +448,9 @@ static int method_map_button(sd_bus_message *m, void *userdata,
 			    "unknown keycode ('%s' or '%s')", from, to);
 	if (gate(m, "org.lgmagic.modify-input"))
 		return 1;
+	if (!daemon_identity_valid(mac))
+		return fail(m, LG_ERROR_INVALID_ARGUMENTS,
+			    "invalid device identity '%s'", mac);
 	r = find_remote(dd, mac);
 	if (!r)
 		return fail(m, LG_ERROR_NOT_FOUND, "no device '%s'", mac);
@@ -481,6 +490,9 @@ static int method_reset_buttons(sd_bus_message *m, void *userdata,
 		return -EINVAL;
 	if (gate(m, "org.lgmagic.modify-input"))
 		return 1;
+	if (!daemon_identity_valid(mac))
+		return fail(m, LG_ERROR_INVALID_ARGUMENTS,
+			    "invalid device identity '%s'", mac);
 	r = find_remote(dd, mac);
 	if (!r)
 		return fail(m, LG_ERROR_NOT_FOUND, "no device '%s'", mac);
@@ -525,6 +537,9 @@ static int method_set_number(sd_bus_message *m, void *userdata, int is_scroll,
 		return -EINVAL;
 	if (gate(m, "org.lgmagic.profile-set"))
 		return 1;
+	if (!daemon_identity_valid(mac))
+		return fail(m, LG_ERROR_INVALID_ARGUMENTS,
+			    "invalid device identity '%s'", mac);
 	r = find_remote(dd, mac);
 	if (!r)
 		return fail(m, LG_ERROR_NOT_FOUND, "no device '%s'", mac);
@@ -580,6 +595,9 @@ static int method_set_calib_path(sd_bus_message *m, void *userdata,
 		return -EINVAL;
 	if (gate(m, "org.lgmagic.modify-input"))
 		return 1;
+	if (!daemon_identity_valid(mac))
+		return fail(m, LG_ERROR_INVALID_ARGUMENTS,
+			    "invalid device identity '%s'", mac);
 	r = find_remote(dd, mac);
 	if (!r)
 		return fail(m, LG_ERROR_NOT_FOUND, "no device '%s'", mac);
@@ -614,6 +632,17 @@ static int property_get_state(sd_bus *bus, const char *path,
 	(void)bus; (void)path; (void)interface; (void)property;
 	(void)userdata; (void)ret_error;
 	return sd_bus_message_append(reply, "s", "running");
+}
+
+static int property_get_api_version(sd_bus *bus, const char *path,
+				    const char *interface,
+				    const char *property,
+				    sd_bus_message *reply, void *userdata,
+				    sd_bus_error *ret_error)
+{
+	(void)bus; (void)path; (void)interface; (void)property;
+	(void)userdata; (void)ret_error;
+	return sd_bus_message_append(reply, "s", LG_API_VERSION);
 }
 
 static int property_get_devices(sd_bus *bus, const char *path,
@@ -660,6 +689,8 @@ static const sd_bus_vtable lg_magic_vtable[] = {
 			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 	SD_BUS_PROPERTY("Devices", "as", property_get_devices, 0,
 			SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+	SD_BUS_PROPERTY("ApiVersion", "s", property_get_api_version, 0,
+			SD_BUS_VTABLE_PROPERTY_CONST),
 	SD_BUS_VTABLE_END
 };
 

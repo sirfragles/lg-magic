@@ -26,6 +26,16 @@ struct pipeline {
 	int have_cal;		/* a calibration JSON was loaded */
 	int airmouse_on;
 	struct airmouse am;
+	/* Keys currently held down on the physical remote: the virtual
+	 * code they were pressed AS.  A map change must release these
+	 * (otherwise the old virtual key stays stuck), and a release
+	 * must repeat the ORIGINAL virtual code - the mapping may have
+	 * changed since the press. */
+	struct {
+		int phys;	/* physical code (the press side) */
+		int virt;	/* virtual code emitted on press */
+	} held[32];
+	int nheld;
 };
 
 void pipeline_init(struct pipeline *p);
@@ -35,10 +45,12 @@ void pipeline_free(struct pipeline *p);
  * (dc->profile, falling back to "default" and then the built-in
  * defaults), reload the calibration from calib_path ("" = none), set
  * the airmouse on/off.  A broken calibration file is an error (err set)
- * but the pipeline stays usable without it.  Returns 0 / -1. */
+ * but the pipeline stays usable without it.  Held keys are released on
+ * kbd_uinput first (a remap must not leave the old virtual key stuck).
+ * Returns 0 / -1. */
 int pipeline_configure(struct pipeline *p, const struct device_config *dc,
 		       const char *calib_path, double global_lpf,
-		       char *err, size_t errsz);
+		       int kbd_uinput, char *err, size_t errsz);
 
 /* One keyboard frame: map + emit keys on kbd_fd, accumulate the wheel
  * and emit whole clicks on mouse_fd.  Returns 0, or -1 when a uinput

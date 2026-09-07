@@ -31,10 +31,10 @@ The v2 architecture is a **thin kernel, fat userspace** split:
                                         │  state: /var/lib/lg-magic/     │
                                         └───┬──────────────────┬─────────┘
                                uinput     │                  │  sd-bus (org.lgmagic)
-                   ┌────────── "lg-magicd keyboard" ──────────┼── polkitd
+                   ┌───────── "lg-magicd keyboard <identity>" ─┼── polkitd
                    ▼                                          ▼
-            ONE virtual mouse                          CLI `lg-magic`
-            + keyboard                                 (libc/libm, own D-Bus client)
+            per remote: one virtual mouse            CLI `lg-magic`
+            + keyboard (names carry the MAC)         (libc/libm, own D-Bus client)
 ```
 
 What this means in practice:
@@ -45,9 +45,12 @@ What this means in practice:
 - **The daemon adds the rest.** `lg-magicd` grabs the keyboard evdev
   (only *after* its virtual devices are ready) and adds the airmouse,
   profiles, button mapping, scroll speed and calibration on top, through
-  **one virtual mouse + one virtual keyboard**. When the daemon stops —
-  including crashes — the grab is released with its file descriptors and
-  the remote falls back to raw kernel input.
+  **one virtual mouse + one virtual keyboard per remote** — the pair is
+  named after the remote's identity (`lg-magicd keyboard <MAC>` /
+  `lg-magicd mouse <MAC>`, `unknown` when the MAC is not readable), and
+  held keys are tracked per remote. When the daemon stops — including
+  crashes — the grab is released with its file descriptors and the
+  remote falls back to raw kernel input.
 - **Zero runtime dependencies for the CLI** — `lg-magic` is built against
   libc/libm only and talks to the daemon over D-Bus with a small
   hand-rolled client (no libsystemd, no Python). The daemon links
@@ -92,8 +95,11 @@ The original Python scripts remain in `scripts/` for reference only.
   calibration path — applied immediately, without a restart
 - Airmouse through the daemon with the v1 signs, scale and LPF
 - sd-bus interface (`org.lgmagic`, `/org/lgmagic/Manager`) with polkit
-  authorization on every mutating method; the IMU evdev device is never
-  grabbed, so `lg-magic imu` works in parallel
+  authorization on every mutating method; device identities are validated
+  ("unknown" or a 17-char BT MAC — anything else is
+  `org.lgmagic.Error.InvalidArguments`) and the `ApiVersion` property
+  (`"2.0"`) lets clients check compatibility; the IMU evdev device is
+  never grabbed, so `lg-magic imu` works in parallel
 
 ### The `lg-magic` binary
 
@@ -195,13 +201,17 @@ Steps performed by the wizard:
 5. **Gyroscope calibration** — "put the remote down and don't touch it"
    (10 s recording, mean bias)
 6. **Calibration tuning** — LPF alpha and sensitivity questions
-7. **Firmware blob** — `lg_magic_calib_XX_XX_XX_XX_XX_XX.bin` for your
-   remote's Bluetooth MAC (+ `lg_magic_calib.bin` fallback) in
-   `/lib/firmware/`
+7. **Firmware blob** — **kernel airmouse mode only**:
+   `lg_magic_calib_XX_XX_XX_XX_XX_XX.bin` for your remote's Bluetooth
+   MAC (+ `lg_magic_calib.bin` fallback) in `/lib/firmware/`. In daemon
+   mode this step is skipped on purpose — the calibration JSON is the
+   single source and the blob would be a second, stale copy.
 8. **Daemon state** (daemon mode) — writes
    `/var/lib/lg-magic/<MAC>/calibration.json` and
    `/etc/lg-magic/devices.d/<MAC>.toml`, and enables `lg-magicd`
-   (`systemctl enable --now`, best-effort)
+   (`systemctl enable --now`, best-effort); the recordings
+   (`calib_accel.csv` / `calib_gyro.csv`) land next to the JSON in
+   `/var/lib/lg-magic/<MAC>/`
 9. **Module reload** — verified with `dmesg` ("Loading LG Magic calibration")
 10. **Airmouse test** — "move the remote, Ctrl+C ends" (in daemon mode
     this reads the daemon's status and falls back to the standalone test)

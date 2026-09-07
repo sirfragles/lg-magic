@@ -10,6 +10,11 @@
  * Polkit fails closed (missing polkitd -> NotAuthorized); uid 0 is
  * authorized unconditionally (the e2e relies on it).
  *
+ * Every method that takes a device identity validates it first
+ * (daemon_identity_valid: "unknown" or a 17-char BT MAC) - the identity
+ * reaches file paths, so arbitrary CLI input is InvalidArguments.  The
+ * ApiVersion property lets clients check compatibility without probing.
+ *
  * The daemon drives the bus manually from its poll() loop (the device
  * manager owns pollfds): daemon_bus_fd/daemon_bus_process.  A bus that
  * cannot be opened degrades to a busless daemon (the busless e2e mode).
@@ -25,6 +30,10 @@
 #define LG_BUS_NAME "org.lgmagic"
 #define LG_BUS_PATH "/org/lgmagic/Manager"
 #define LG_BUS_IFACE "org.lgmagic.Manager"
+
+/* The API version advertised on the ApiVersion property (clients can
+ * check it instead of guessing method availability). */
+#define LG_API_VERSION "2.0"
 
 /* D-Bus error names (org.lgmagic.Error.*). */
 #define LG_ERROR_NOT_AUTHORIZED "org.lgmagic.Error.NotAuthorized"

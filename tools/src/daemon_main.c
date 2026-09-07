@@ -2,10 +2,10 @@
 /*
  * daemon_main.c - lg-magicd, the system daemon.
  *
- * Startup order (safety requirement from the plan): create BOTH uinput
- * devices, then scan and EVIOCGRAB the keyboard, then the poll loop.
- * On any exit - including SIGKILL - the grab dies with the fd and the
- * remote falls back to raw kernel events.
+ * Startup order (safety requirement from the plan): scan and open each
+ * remote, create ITS virtual pair BEFORE grabbing it, then the poll
+ * loop.  On any exit - including SIGKILL - the grab dies with the fd
+ * and the remote falls back to raw kernel events.
  *
  * The sd-bus interface (org.lgmagic, see daemon_bus.c) is optional:
  * without a system bus the daemon logs and keeps running busless (the
@@ -20,7 +20,6 @@
 #include "daemon_config.h"
 #include "daemon_devices.h"
 #include "evdev.h"
-#include "uinput.h"
 
 #include <errno.h>
 #include <poll.h>
@@ -57,41 +56,6 @@ static long long now_ms(void)
 	return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* The two virtual devices: the keyboard carries the full EV_KEY set
- * (mapped keys + mouse buttons are all keycodes), the mouse carries
- * the relative axes. */
-static int create_uinput_devices(int *kbd_fd, int *mouse_fd,
-				 char *err, size_t errsz)
-{
-	struct uinput_spec kbd, mouse;
-	int i;
-
-	uinput_spec_init(&kbd, "lg-magicd keyboard");
-	for (i = 0; i < KEY_CNT; i++)
-		uinput_spec_key(&kbd, (unsigned)i);
-
-	uinput_spec_init(&mouse, "lg-magicd mouse");
-	uinput_spec_rel(&mouse, REL_X);
-	uinput_spec_rel(&mouse, REL_Y);
-	uinput_spec_rel(&mouse, REL_WHEEL);
-	uinput_spec_rel(&mouse, REL_WHEEL_HI_RES);
-	uinput_spec_rel(&mouse, REL_HWHEEL);
-	uinput_spec_key(&mouse, BTN_LEFT);
-	uinput_spec_key(&mouse, BTN_RIGHT);
-	uinput_spec_key(&mouse, BTN_MIDDLE);
-
-	*kbd_fd = uinput_create(&kbd, err, errsz);
-	if (*kbd_fd < 0)
-		return -1;
-	*mouse_fd = uinput_create(&mouse, err, errsz);
-	if (*mouse_fd < 0) {
-		uinput_close(*kbd_fd);
-		*kbd_fd = -1;
-		return -1;
-	}
-	return 0;
-}
-
 int main(int argc, char **argv)
 {
 	const char *config_root = DEFAULT_CONFIG_ROOT;
@@ -106,7 +70,6 @@ int main(int argc, char **argv)
 	size_t nfds = 0;
 	char err[256];
 	sd_bus *bus = NULL;
-	int kbd_uinput = -1, mouse_uinput = -1;
 	int ndev;
 	int i, ret = 0;
 
@@ -145,23 +108,11 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	/* 1. The virtual devices BEFORE anything is grabbed (a daemon
-	 * restart must never leave the remote without a target). */
-	if (no_uinput) {
-		fprintf(stderr, "lg-magicd: --no-uinput: skipping the virtual "
-			"devices\n");
-	} else if (create_uinput_devices(&kbd_uinput, &mouse_uinput, err,
-					 sizeof(err)) < 0) {
-		fprintf(stderr, "lg-magicd: %s\n", err);
-		ret = 1;
-		goto out;
-	} else {
-		fprintf(stderr, "lg-magicd: virtual devices ready\n");
-	}
-
-	/* 2. Discover + open + grab; uinput already exists. */
-	if (daemon_devices_init(&dd, &dc, kbd_override, debug, err,
-				sizeof(err)) < 0) {
+	/* 1. Discover + open each remote: its virtual pair is created
+	 * BEFORE the grab, inside remote_open (a daemon restart must
+	 * never leave a remote without a target). */
+	if (daemon_devices_init(&dd, &dc, kbd_override, no_uinput, debug,
+				err, sizeof(err)) < 0) {
 		fprintf(stderr, "lg-magicd: %s\n", err);
 		ret = 1;
 		goto out;
@@ -255,19 +206,14 @@ int main(int argc, char **argv)
 				continue;
 			}
 			if (fds[i].revents & (POLLIN | POLLHUP | POLLERR))
-				(void)daemon_devices_handle(&dd, (size_t)i,
-							    kbd_uinput,
-							    mouse_uinput);
+				(void)daemon_devices_handle(&dd, (size_t)i);
 		}
 	}
 
-	/* The fds (and with them the grab) are released here, then the
-	 * virtual devices are destroyed. */
+	/* The grab and each remote's virtual pair die with the fds here. */
 	daemon_bus_close(bus);
 	daemon_devices_free(&dd);
 out:
-	uinput_close(kbd_uinput);
-	uinput_close(mouse_uinput);
 	daemon_config_free(&dc);
 	free(fds);
 	return ret;

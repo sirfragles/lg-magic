@@ -6,7 +6,9 @@
 #include "daemon_devices.h"
 
 #include "pairing.h"
+#include "uinput.h"
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <stdarg.h>
@@ -139,12 +141,84 @@ static int scan_inputs(struct scan_entry **entries, size_t *n,
 /* Remote open/close                                                   */
 /* ------------------------------------------------------------------ */
 
+int daemon_identity_valid(const char *s)
+{
+	size_t i;
+
+	if (!s)
+		return 0;
+	if (strcmp(s, "unknown") == 0)
+		return 1;
+	if (strlen(s) != 17)
+		return 0;
+	for (i = 0; i < 17; i++) {
+		if (i % 3 == 2) {
+			if (s[i] != ':')
+				return 0;
+		} else if (!isxdigit((unsigned char)s[i])) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
 static void remote_free(struct daemon_remote *r)
 {
 	evdev_close(&r->kbd);
 	evdev_close(&r->imu);
+	uinput_close(r->kbd_uinput);
+	uinput_close(r->mouse_uinput);
 	device_config_free(&r->dc);
 	pipeline_free(&r->pl);
+}
+
+/* The per-remote virtual pair: the keyboard carries the full EV_KEY
+ * set (mapped keys + mouse buttons are all keycodes), the mouse the
+ * relative axes.  The names carry the identity so desktops can tell
+ * remotes apart.  Returns 0 or -1 (nothing half-open is kept). */
+static int remote_uinput_open(struct daemon_remote *r,
+			      const struct daemon_devices *dd)
+{
+	struct uinput_spec kbd, mouse;
+	/* identity is 64 bytes; room for it plus the fixed prefix */
+	char kname[sizeof(r->identity) + sizeof("lg-magicd keyboard ")];
+	char mname[sizeof(r->identity) + sizeof("lg-magicd mouse ")];
+	char err[256];
+	int i;
+
+	if (dd->no_uinput)
+		return 0;
+	snprintf(kname, sizeof(kname), "lg-magicd keyboard %s", r->identity);
+	snprintf(mname, sizeof(mname), "lg-magicd mouse %s", r->identity);
+	uinput_spec_init(&kbd, kname);
+	for (i = 0; i < KEY_CNT; i++)
+		uinput_spec_key(&kbd, (unsigned)i);
+	uinput_spec_init(&mouse, mname);
+	uinput_spec_rel(&mouse, REL_X);
+	uinput_spec_rel(&mouse, REL_Y);
+	uinput_spec_rel(&mouse, REL_WHEEL);
+	uinput_spec_rel(&mouse, REL_WHEEL_HI_RES);
+	uinput_spec_rel(&mouse, REL_HWHEEL);
+	uinput_spec_key(&mouse, BTN_LEFT);
+	uinput_spec_key(&mouse, BTN_RIGHT);
+	uinput_spec_key(&mouse, BTN_MIDDLE);
+
+	r->kbd_uinput = uinput_create(&kbd, err, sizeof(err));
+	if (r->kbd_uinput < 0) {
+		log_info("virtual devices for %s: %s (not grabbing, retry "
+			 "on the next rescan)", r->identity, err);
+		return -1;
+	}
+	r->mouse_uinput = uinput_create(&mouse, err, sizeof(err));
+	if (r->mouse_uinput < 0) {
+		uinput_close(r->kbd_uinput);
+		r->kbd_uinput = -1;
+		log_info("virtual devices for %s: %s (not grabbing, retry "
+			 "on the next rescan)", r->identity, err);
+		return -1;
+	}
+	log_info("virtual devices ready for %s", r->identity);
+	return 0;
 }
 
 /* Open one remote from its paths, load its config, configure the
@@ -159,17 +233,24 @@ static int remote_open(struct daemon_remote *r, const char *identity,
 	memset(r, 0, sizeof(*r));
 	r->kbd.fd = -1;
 	r->imu.fd = -1;
+	r->kbd_uinput = -1;
+	r->mouse_uinput = -1;
 	snprintf(r->identity, sizeof(r->identity), "%s", identity);
 	snprintf(r->kbd_path, sizeof(r->kbd_path), "%s", kbd_path);
 	snprintf(r->imu_path, sizeof(r->imu_path), "%s", imu_path);
 	pipeline_init(&r->pl);
 
+	/* The virtual pair BEFORE the grab (plan safety order): a remote
+	 * must never be taken over without an output target. */
+	if (remote_uinput_open(r, dd) < 0)
+		goto fail;
+
 	if (evdev_find_keyboard(&r->kbd, kbd_path, err, sizeof(err)) < 0) {
 		log_debug(dd, "keyboard %s: %s", kbd_path, err);
 		goto fail;
 	}
-	/* EVIOCGRAB after the uinput devices exist (daemon_main created
-	 * them first); best effort - warn and continue without it. */
+	/* EVIOCGRAB after this remote's uinput pair exists.  Best effort -
+	 * warn and continue without it. */
 	if (evdev_grab(r->kbd.fd, 1) < 0)
 		log_info("cannot grab %s: %s (continuing without exclusive "
 			 "grab)", kbd_path, strerror(errno));
@@ -192,7 +273,7 @@ static int remote_open(struct daemon_remote *r, const char *identity,
 				 sizeof(calib_path));
 	if (pipeline_configure(&r->pl, &r->dc, calib_path,
 			       dd->config->global->lpf_alpha,
-			       err, sizeof(err)) < 0)
+			       r->kbd_uinput, err, sizeof(err)) < 0)
 		log_info("calibration for %s: %s (airmouse without "
 			 "calibration)", identity, err);
 
@@ -271,8 +352,13 @@ int daemon_devices_rescan(struct daemon_devices *dd, char *err, size_t errsz)
 		/* Test mode: only the pinned keyboard is taken over. */
 		if (dd->kbd_override && strcmp(kbd_path, dd->kbd_override) != 0)
 			continue;
+		/* The identity reaches file paths below - accept only a MAC
+		 * or the "unknown" fallback (see daemon_identity_valid). */
 		snprintf(identity, sizeof(identity), "%s",
-			 pr->uniq[0] ? pr->uniq : "unknown");
+			 daemon_identity_valid(pr->uniq) ? pr->uniq : "unknown");
+		if (pr->uniq[0] && !daemon_identity_valid(pr->uniq))
+			log_debug(dd, "non-MAC uniq '%s' - using the "
+				  "'unknown' identity", pr->uniq);
 
 		for (j = 0; j < dd->nremotes; j++) {
 			struct daemon_remote *e = &dd->remotes[j];
@@ -288,6 +374,8 @@ int daemon_devices_rescan(struct daemon_devices *dd, char *err, size_t errsz)
 			memset(e, 0, sizeof(*e));
 			e->kbd.fd = -1;
 			e->imu.fd = -1;
+			e->kbd_uinput = -1;
+			e->mouse_uinput = -1;
 			nnew++;
 			found = 1;
 			break;
@@ -373,8 +461,7 @@ static void drain_inotify(struct daemon_devices *dd)
 	schedule_rescan(dd, RESCAN_DEBOUNCE_MS);
 }
 
-static int handle_kbd(struct daemon_remote *r,
-		      struct daemon_devices *dd, int kbd_uinput, int mouse_uinput)
+static int handle_kbd(struct daemon_remote *r, struct daemon_devices *dd)
 {
 	struct evdev_frame f;
 	char err[256];
@@ -385,7 +472,8 @@ static int handle_kbd(struct daemon_remote *r,
 		if (f.nkeys || f.wheel)
 			log_debug(dd, "keyboard frame from %s: %d keys, wheel %d",
 				  r->identity, f.nkeys, f.wheel);
-		if (pipeline_keyboard(&r->pl, &f, kbd_uinput, mouse_uinput) < 0)
+		if (pipeline_keyboard(&r->pl, &f, r->kbd_uinput,
+				      r->mouse_uinput) < 0)
 			log_info("uinput write for %s failed: %s", r->identity,
 				 strerror(errno));
 		return 1;
@@ -399,8 +487,7 @@ static int handle_kbd(struct daemon_remote *r,
 	return -1;
 }
 
-static int handle_imu(struct daemon_remote *r,
-		      struct daemon_devices *dd, int mouse_uinput)
+static int handle_imu(struct daemon_remote *r, struct daemon_devices *dd)
 {
 	struct evdev_frame f;
 	char err[256];
@@ -408,7 +495,7 @@ static int handle_imu(struct daemon_remote *r,
 
 	rv = evdev_read_frame_ext(&r->imu, &f, err, sizeof(err));
 	if (rv == 1) {
-		if (pipeline_imu(&r->pl, &f, mouse_uinput) < 0)
+		if (pipeline_imu(&r->pl, &f, r->mouse_uinput) < 0)
 			log_info("uinput write for %s (mouse) failed: %s",
 				 r->identity, strerror(errno));
 		return 1;
@@ -422,8 +509,7 @@ static int handle_imu(struct daemon_remote *r,
 	return -1;
 }
 
-int daemon_devices_handle(struct daemon_devices *dd, size_t idx,
-			  int kbd_uinput, int mouse_uinput)
+int daemon_devices_handle(struct daemon_devices *dd, size_t idx)
 {
 	size_t n = 0, i;
 
@@ -439,12 +525,12 @@ int daemon_devices_handle(struct daemon_devices *dd, size_t idx,
 
 		if (r->kbd.fd >= 0) {
 			if (idx == n)
-				return handle_kbd(r, dd, kbd_uinput, mouse_uinput);
+				return handle_kbd(r, dd);
 			n++;
 		}
 		if (r->imu.fd >= 0) {
 			if (idx == n)
-				return handle_imu(r, dd, mouse_uinput);
+				return handle_imu(r, dd);
 			n++;
 		}
 	}
@@ -498,7 +584,8 @@ int daemon_devices_reload(struct daemon_devices *dd, char *err, size_t errsz)
 		daemon_config_calib_path(dd->config, &ndc, r->identity,
 					 calib_path, sizeof(calib_path));
 		if (pipeline_configure(&r->pl, &ndc, calib_path,
-				       newg->lpf_alpha, err, errsz) < 0)
+				       newg->lpf_alpha, r->kbd_uinput,
+				       err, errsz) < 0)
 			log_info("calibration reload for %s: %s", r->identity,
 				 err);
 		device_config_free(&r->dc);
@@ -511,7 +598,7 @@ int daemon_devices_reload(struct daemon_devices *dd, char *err, size_t errsz)
 /* ------------------------------------------------------------------ */
 
 int daemon_devices_init(struct daemon_devices *dd, struct daemon_config *config,
-			const char *kbd_override, int debug,
+			const char *kbd_override, int no_uinput, int debug,
 			char *err, size_t errsz)
 {
 	(void)err;
@@ -519,6 +606,7 @@ int daemon_devices_init(struct daemon_devices *dd, struct daemon_config *config,
 	memset(dd, 0, sizeof(*dd));
 	dd->config = config;
 	dd->kbd_override = kbd_override;
+	dd->no_uinput = no_uinput;
 	dd->debug = debug;
 	dd->inotify_fd = -1;
 	dd->inotify_wd = -1;

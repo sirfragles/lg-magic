@@ -25,11 +25,20 @@ void pipeline_free(struct pipeline *p)
 
 int pipeline_configure(struct pipeline *p, const struct device_config *dc,
 		       const char *calib_path, double global_lpf,
-		       char *err, size_t errsz)
+		       int kbd_uinput, char *err, size_t errsz)
 {
 	const struct profile *src;
 	struct calib cal;
 	double alpha;
+
+	/* Release held keys before the map changes: a remap while a key
+	 * is down must not leave the previously pressed virtual key
+	 * stuck forever (the later physical release repeats the ORIGINAL
+	 * code, so nothing would release the old one). */
+	if (kbd_uinput >= 0) {
+		for (; p->nheld > 0; p->nheld--)
+			uinput_key(kbd_uinput, p->held[p->nheld - 1].virt, 0);
+	}
 
 	/* Active profile: state/device name -> "default" -> built-ins.
 	 * Reset first so a re-configure does not leak values that were
@@ -70,16 +79,50 @@ int pipeline_keyboard(struct pipeline *p, const struct evdev_frame *f,
 	int i, rc = 0;
 
 	for (i = 0; i < f->nkeys; i++) {
-		int to = f->keys[i].code;
-		size_t k;
+		int phys = f->keys[i].code, val = f->keys[i].value;
+		int to = phys, held_idx = -1;
+		int k;
 
-		for (k = 0; k < p->active.nmap; k++) {
-			if (p->active.map[k].from == f->keys[i].code) {
-				to = p->active.map[k].to;
-				break;
+		for (k = 0; k < p->nheld; k++)
+			if (p->held[k].phys == phys)
+				held_idx = (int)k;
+		if (held_idx >= 0) {
+			/* Repeat AND release: the code the press was
+			 * mapped AS - the map may have changed while
+			 * held, and neither may start a different
+			 * virtual key. */
+			to = p->held[held_idx].virt;
+			if (val == 0) {
+				p->held[held_idx] = p->held[p->nheld - 1];
+				p->nheld--;
+			}
+		} else if (val != 0) {
+			/* Fresh press: resolve the current map and pin
+			 * it for the future repeat/release. */
+			for (k = 0; k < (int)p->active.nmap; k++) {
+				if (p->active.map[k].from == phys) {
+					to = p->active.map[k].to;
+					break;
+				}
+			}
+			if (p->nheld <
+			    (int)(sizeof(p->held) / sizeof(p->held[0]))) {
+				p->held[p->nheld].phys = phys;
+				p->held[p->nheld].virt = to;
+				p->nheld++;
+			}
+		} else {
+			/* Release of an untracked key (pressed before the
+			 * daemon took over): emit the current mapping -
+			 * harmless when the virtual key is already up. */
+			for (k = 0; k < (int)p->active.nmap; k++) {
+				if (p->active.map[k].from == phys) {
+					to = p->active.map[k].to;
+					break;
+				}
 			}
 		}
-		if (uinput_key(kbd_fd, to, f->keys[i].value) < 0)
+		if (uinput_key(kbd_fd, to, val) < 0)
 			rc = -1;
 	}
 
