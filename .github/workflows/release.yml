@@ -36,7 +36,7 @@ jobs:
       - name: Clean build artifacts before packaging
         run: make clean
         # Keep the CI's build artifacts (.o/.ko, the binaries) out of the
-        # module sources that debian/rules ships into /usr/src/lg-magic-2.0.
+        # module sources that debian/rules ships into /usr/src/lg-magic-<VERSION>.
 
       - name: Build the Debian package
         run: dpkg-buildpackage -us -uc -b
@@ -69,12 +69,16 @@ jobs:
 
       - name: Build the rpm
         run: |
+          # The version follows the tag (v2.0.1 -> 2.0.1); the Source0
+          # tarball must be lg-magic-$VERSION.tar.gz with the matching
+          # top directory, or %setup cannot find it.
+          V=${GITHUB_REF_NAME#v}
           mkdir -p ~/rpmbuild/{SOURCES,SPECS}
-          tar -czf ~/rpmbuild/SOURCES/lg-magic-2.0.tar.gz \
+          tar -czf ~/rpmbuild/SOURCES/lg-magic-$V.tar.gz \
             --exclude=.git --exclude='*.o' \
             --exclude=tools/lg-magic --exclude=tools/lg-magicd \
             --exclude=tools/tests/fake_devices \
-            --transform='s,^,lg-magic-2.0/,' .
+            --transform="s,^,lg-magic-$V/," .
           cp rpm/lg-magic.spec ~/rpmbuild/SPECS/
           rpmbuild -bb ~/rpmbuild/SPECS/lg-magic.spec
 
@@ -85,13 +89,13 @@ jobs:
           # the workspace and upload a last-segment-only glob instead
           # (the same pattern the deb job uses).
           mkdir -p dist
-          cp ~/rpmbuild/RPMS/*/lg-magic-2.0*.rpm dist/
+          cp ~/rpmbuild/RPMS/*/lg-magic-*.rpm dist/
 
       - name: Upload the .rpm artifact
         uses: actions/upload-artifact@v4
         with:
           name: lg-magic-rpm
-          path: dist/lg-magic-2.0*.rpm
+          path: dist/lg-magic-*.rpm
           if-no-files-found: error
 
   # Arch: makepkg in an Arch container as a non-root builder. dkms is
@@ -108,13 +112,16 @@ jobs:
 
       - name: Build the package with makepkg (non-root builder)
         run: |
+          # The source tarball must be lg-magic-$V.tar.gz with the
+          # matching top directory (PKGBUILD cds into lg-magic-$pkgver).
+          V=${GITHUB_REF_NAME#v}
           useradd -m builder
           mkdir -p /tmp/pkg/src
-          tar -czf /tmp/pkg/src/lg-magic-2.0.tar.gz \
+          tar -czf /tmp/pkg/src/lg-magic-$V.tar.gz \
             --exclude=.git --exclude='*.o' \
             --exclude=tools/lg-magic --exclude=tools/lg-magicd \
             --exclude=tools/tests/fake_devices \
-            --transform='s,^,lg-magic-2.0/,' .
+            --transform="s,^,lg-magic-$V/," .
           chown -R builder:builder "$GITHUB_WORKSPACE" /tmp/pkg
           su builder -c '
             set -e
@@ -129,7 +136,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lg-magic-arch
-          path: /tmp/pkg/lg-magic-2.0*.pkg.tar.zst
+          path: /tmp/pkg/lg-magic-*.pkg.tar.zst
           if-no-files-found: error
 
   # Attach all three packages to the GitHub Release for the tag.
@@ -148,5 +155,5 @@ jobs:
         with:
           files: |
             dist/lg-magic-dkms_*.deb
-            dist/lg-magic-2.0*.rpm
-            dist/lg-magic-2.0*.pkg.tar.zst
+            dist/lg-magic-*.rpm
+            dist/lg-magic-*.pkg.tar.zst

@@ -241,15 +241,16 @@ Each distro package is built and sanity-checked in a clean container:
   fresh container. The postinst runs `dkms add/build/install` with every
   step **best-effort** (`|| true`): a machine without matching kernel
   headers (or with Secure Boot rejecting the unsigned module) must still
-  get a clean install - `dkms status` then shows `lg-magic/2.0: added`.
+  get a clean install - `dkms status` then shows `lg-magic/2.0.1: added`.
   With headers present the module builds and `dkms status` shows
   `installed`. Verify installed files (`/usr/bin/lg-magic`,
   `/usr/libexec/lg-magicd`, the unit, policy, dbus conf, tmpfiles,
-  `config.toml`, the udev rule, `/usr/src/lg-magic-2.0/dkms.conf`) and
+  `config.toml`, the udev rule, `/usr/src/lg-magic-2.0.1/dkms.conf`) and
   the `ldd` split: `lg-magic` without libsystemd, `lg-magicd` with it.
 - **Fedora**: `rpmbuild -bb rpm/lg-magic.spec` in a fedora container
-  (Source0 pre-seeded with a snapshot tarball before the v2.0 tag
-  exists); `rpm -qlp` content checks. Same best-effort DKMS policy in
+  (Source0 pre-seeded with a snapshot tarball named for the dkms.conf
+  version - the tag tarball serves direct builds); `rpm -qlp` content
+  checks. Same best-effort DKMS policy in
   `%post`. Note: DKMS on Fedora needs a matching `kernel-devel` on the
   target machine.
 - **Arch**: `makepkg -sf --noconfirm --nodeps` in an

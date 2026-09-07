@@ -1,8 +1,8 @@
 # Maintainer: Ilya Chelyadin <sirfragles@users.noreply.github.com>
-# Contributor: lg-magic v2.0
+# Contributor: lg-magic v2.0.1
 
 pkgname=lg-magic
-pkgver=2.0
+pkgver=2.0.1
 pkgrel=1
 pkgdesc="LG Magic Remote MR20 driver, daemon and tools"
 arch=('x86_64' 'aarch64')
@@ -12,7 +12,7 @@ depends=('dkms' 'polkit' 'systemd-libs')
 makedepends=('gcc' 'make' 'pkgconf' 'systemd')
 install=lg-magic.install
 source=("lg-magic-$pkgver.tar.gz::https://github.com/sirfragles/lg-magic/archive/refs/tags/v$pkgver.tar.gz")
-# Fixed once the v2.0 tag exists (CI pre-seeds SRCDEST from the checkout).
+# CI pre-seeds SRCDEST from the checkout; the URL serves direct builds.
 sha256sums=('SKIP')
 backup=('etc/lg-magic/config.toml')
 

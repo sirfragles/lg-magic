@@ -18,6 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Derive the package version from dkms.conf
+        run: echo "V=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' dkms.conf)" >> "$GITHUB_ENV"
+        # Single source of truth: dkms.conf PACKAGE_VERSION. The .deb
+        # installs into /usr/src/lg-magic-$V and postinst registers
+        # lg-magic/$V with dkms - the steps below assert exactly that.
+
       - name: Install build, test and packaging dependencies
         run: |
           sudo apt-get update
@@ -93,8 +99,9 @@ jobs:
       - name: Clean build artifacts before packaging
         run: make clean
         # debian/rules copies the module sources (Makefile, COPYING,
-        # dkms.conf, kernel/, include/) into /usr/src/lg-magic-2.0 inside
-        # the .deb - keep the CI's .o/.ko files out of the shipped tree.
+        # dkms.conf, kernel/, include/) into /usr/src/lg-magic-$V inside
+        # the .deb (version from debian/changelog) - keep the CI's
+        # .o/.ko files out of the shipped tree.
 
       - name: Build the Debian package
         run: dpkg-buildpackage -us -uc -b
@@ -124,7 +131,7 @@ jobs:
           test -f /usr/share/dbus-1/system.d/org.lgmagic.conf
           test -f /etc/lg-magic/config.toml
           test -f /etc/udev/rules.d/51-lgimu.rules
-          test -f /usr/src/lg-magic-2.0/dkms.conf
+          test -f /usr/src/lg-magic-$V/dkms.conf
           echo "OK: CLI, daemon, unit, policy, dbus conf, config and DKMS tree installed"
 
       - name: Check DKMS module state (tolerant)
@@ -133,12 +140,12 @@ jobs:
           # fail CI: report the dkms state but keep this step green.
           echo "== dkms status =="
           dkms status || true
-          echo "== /usr/src/lg-magic-2.0 =="
-          ls -la /usr/src/lg-magic-2.0 || echo "warning: /usr/src/lg-magic-2.0 not found"
-          if dkms status 2>/dev/null | grep -q 'lg-magic/2.0'; then
-            echo "OK: lg-magic/2.0 registered in dkms"
+          echo "== /usr/src/lg-magic-$V =="
+          ls -la /usr/src/lg-magic-$V || echo "warning: /usr/src/lg-magic-$V not found"
+          if dkms status 2>/dev/null | grep -q "lg-magic/$V"; then
+            echo "OK: lg-magic/$V registered in dkms"
           else
-            echo "::warning::lg-magic/2.0 missing from 'dkms status' (see dkms output above)"
+            echo "::warning::lg-magic/$V missing from 'dkms status' (see dkms output above)"
           fi
 
       - name: Upload the .deb artifact
@@ -149,15 +156,20 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-  # Fedora: build the rpm with rpmbuild in a fedora container. The v2.0
-  # git tag does not exist on branch pushes, so the spec's Source0
-  # tarball is pre-seeded with a snapshot of the checkout (the same way
-  # the release workflow builds).
+  # Fedora: build the rpm with rpmbuild in a fedora container. The spec's
+  # Source0 is a tag tarball, which does not exist on branch pushes, so
+  # the tarball is pre-seeded with a snapshot of the checkout named for
+  # the dkms.conf version (the same way the release workflow builds).
   fedora:
     runs-on: ubuntu-latest
     container: fedora:latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Derive the package version from dkms.conf
+        run: echo "V=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' dkms.conf)" >> "$GITHUB_ENV"
+        # The spec's %setup extracts Source0 into lg-magic-%{version};
+        # the tarball name must carry the same version.
 
       - name: Install build dependencies
         run: |
@@ -167,17 +179,17 @@ jobs:
       - name: Snapshot sources and build the rpm
         run: |
           mkdir -p ~/rpmbuild/{SOURCES,SPECS}
-          tar -czf ~/rpmbuild/SOURCES/lg-magic-2.0.tar.gz \
+          tar -czf ~/rpmbuild/SOURCES/lg-magic-$V.tar.gz \
             --exclude=.git --exclude='*.o' \
             --exclude=tools/lg-magic --exclude=tools/lg-magicd \
             --exclude=tools/tests/fake_devices \
-            --transform='s,^,lg-magic-2.0/,' .
+            --transform="s,^,lg-magic-$V/," .
           cp rpm/lg-magic.spec ~/rpmbuild/SPECS/
           rpmbuild -bb ~/rpmbuild/SPECS/lg-magic.spec
 
       - name: Verify the package contents
         run: |
-          rpm=$(ls ~/rpmbuild/RPMS/*/lg-magic-2.0*.rpm)
+          rpm=$(ls ~/rpmbuild/RPMS/*/lg-magic-$V*.rpm)
           for f in /usr/bin/lg-magic /usr/libexec/lg-magicd \
                    /usr/lib/systemd/system/lg-magicd.service \
                    /usr/lib/tmpfiles.d/lg-magic.conf \
@@ -185,7 +197,7 @@ jobs:
                    /usr/share/dbus-1/system.d/org.lgmagic.conf \
                    /etc/lg-magic/config.toml \
                    /usr/lib/udev/rules.d/51-lgimu.rules \
-                   /usr/src/lg-magic-2.0/dkms.conf; do
+                   /usr/src/lg-magic-$V/dkms.conf; do
             rpm -qlp "$rpm" | grep -qxF "$f" || { echo "missing: $f"; exit 1; }
           done
           echo "OK: all rpm files present"
@@ -197,13 +209,13 @@ jobs:
           # the workspace and upload a last-segment-only glob instead
           # (the same pattern the deb job uses).
           mkdir -p dist
-          cp ~/rpmbuild/RPMS/*/lg-magic-2.0*.rpm dist/
+          cp ~/rpmbuild/RPMS/*/lg-magic-$V*.rpm dist/
 
       - name: Upload the .rpm artifact
         uses: actions/upload-artifact@v4
         with:
           name: lg-magic-rpm
-          path: dist/lg-magic-2.0*.rpm
+          path: dist/lg-magic-*.rpm
           retention-days: 30
           if-no-files-found: error
 
@@ -217,17 +229,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Derive the package version from dkms.conf
+        run: echo "V=$(sed -n 's/^PACKAGE_VERSION="\(.*\)"/\1/p' dkms.conf)" >> "$GITHUB_ENV"
+        # PKGBUILD cds into lg-magic-$pkgver - the tarball name must
+        # carry the same version as pkgver.
+
       - name: Install build dependencies
         run: pacman -Sy --noconfirm --needed pkgconf systemd
 
-      - name: Snapshot sources (the v2.0 tag does not exist yet)
+      - name: Snapshot sources (tag tarballs do not exist on branch pushes)
         run: |
           mkdir -p /tmp/pkg/src
-          tar -czf /tmp/pkg/src/lg-magic-2.0.tar.gz \
+          tar -czf /tmp/pkg/src/lg-magic-$V.tar.gz \
             --exclude=.git --exclude='*.o' \
             --exclude=tools/lg-magic --exclude=tools/lg-magicd \
             --exclude=tools/tests/fake_devices \
-            --transform='s,^,lg-magic-2.0/,' .
+            --transform="s,^,lg-magic-$V/," .
 
       - name: Build with makepkg (non-root builder)
         run: |
@@ -244,14 +261,14 @@ jobs:
 
       - name: Verify the package contents
         run: |
-          pkg=$(ls /tmp/pkg/lg-magic-2.0*.pkg.tar.zst)
+          pkg=$(ls /tmp/pkg/lg-magic-$V*.pkg.tar.zst)
           for f in usr/bin/lg-magic usr/lib/lg-magicd \
                    usr/lib/systemd/system/lg-magicd.service \
                    usr/lib/tmpfiles.d/lg-magic.conf \
                    usr/share/polkit-1/actions/org.lgmagic.policy \
                    usr/share/dbus-1/system.d/org.lgmagic.conf \
                    etc/lg-magic/config.toml usr/lib/udev/rules.d/51-lgimu.rules \
-                   usr/src/lg-magic-2.0/dkms.conf; do
+                   usr/src/lg-magic-$V/dkms.conf; do
             tar -tf "$pkg" | grep -qxF "$f" || { echo "missing: $f"; exit 1; }
           done
           # Arch has no /usr/libexec: the unit must point at /usr/lib/lg-magicd.
@@ -264,7 +281,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lg-magic-arch
-          path: /tmp/pkg/lg-magic-2.0*.pkg.tar.zst
+          path: /tmp/pkg/lg-magic-*.pkg.tar.zst
           retention-days: 30
           if-no-files-found: error
 

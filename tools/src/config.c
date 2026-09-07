@@ -23,7 +23,7 @@
 #define CFG_USER_DIR "/.config/lg-magic"
 
 struct config *g_cfg;
-const char *g_tool_version = "2.0";
+const char *g_tool_version = "2.0.1";
 
 enum {
 	X_IMU_DEVICE = 1 << 0,

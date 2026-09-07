@@ -5,12 +5,16 @@
 # setup wizard, not here.
 
 post_install() {
+  # The DKMS module version follows the package version (pacman passes
+  # pkgver-pkgrel as $2; shared with post_upgrade below, which calls
+  # post_install without resetting the positional parameters).
+  V=${2%%-*}
   # Create the daemon state directory (/var/lib/lg-magic).
   systemd-tmpfiles --create lg-magic.conf || true
   if command -v dkms >/dev/null 2>&1; then
-    dkms add -m lg-magic -v 2.0 || :
-    dkms build -m lg-magic -v 2.0 || :
-    dkms install -m lg-magic -v 2.0 || :
+    dkms add -m lg-magic -v "$V" || :
+    dkms build -m lg-magic -v "$V" || :
+    dkms install -m lg-magic -v "$V" || :
   fi
   udevadm control --reload-rules || true
   udevadm trigger || true
@@ -21,8 +25,10 @@ post_upgrade() {
 }
 
 pre_remove() {
+  # Still installed while pre_remove runs, so $2 carries the version.
+  V=${2%%-*}
   if command -v dkms >/dev/null 2>&1; then
-    dkms remove -m lg-magic -v 2.0 --all || :
+    dkms remove -m lg-magic -v "$V" --all || :
   fi
 }
 

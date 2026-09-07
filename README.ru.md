@@ -148,13 +148,13 @@ libc/libm.
 
 ```bash
 # Ubuntu / Debian
-sudo apt install ./lg-magic-dkms_2.0-1_amd64.deb
+sudo apt install ./lg-magic-dkms_2.0.1-1_amd64.deb
 
 # Fedora
-sudo dnf install ./lg-magic-2.0-1.fc42.x86_64.rpm
+sudo dnf install ./lg-magic-2.0.1-1.fc42.x86_64.rpm
 
 # Arch
-sudo pacman -U ./lg-magic-2.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./lg-magic-2.0.1-1-x86_64.pkg.tar.zst
 ```
 
 Пакеты ставят `/usr/bin/lg-magic`, `/usr/libexec/lg-magicd`
@@ -177,12 +177,12 @@ sudo modprobe lg_magic
 ### 3. Ручная установка DKMS
 
 ```bash
-sudo mkdir -p /usr/src/lg-magic-2.0
-sudo cp Makefile dkms.conf COPYING /usr/src/lg-magic-2.0/
-sudo cp -r kernel include /usr/src/lg-magic-2.0/
-sudo dkms add -m lg-magic -v 2.0
-sudo dkms build -m lg-magic -v 2.0
-sudo dkms install -m lg-magic -v 2.0
+sudo mkdir -p /usr/src/lg-magic-2.0.1
+sudo cp Makefile dkms.conf COPYING /usr/src/lg-magic-2.0.1/
+sudo cp -r kernel include /usr/src/lg-magic-2.0.1/
+sudo dkms add -m lg-magic -v 2.0.1
+sudo dkms build -m lg-magic -v 2.0.1
+sudo dkms install -m lg-magic -v 2.0.1
 # DKMS собирает только модуль — инструменты ставятся отдельно:
 make tools && sudo make install
 ```
@@ -393,7 +393,7 @@ echo 0 > /sys/module/lg_magic/parameters/debug
 | `/usr/share/polkit-1/actions/org.lgmagic.policy` | две акции polkit |
 | `/usr/share/dbus-1/system.d/org.lgmagic.conf` | политика D-Bus демона |
 | `/lib/modules/$(uname -r)/kernel/drivers/input/misc/lg_magic.ko` | модуль (через DKMS) |
-| `/usr/src/lg-magic-2.0/` | дерево исходников DKMS |
+| `/usr/src/lg-magic-2.0.1/` | дерево исходников DKMS |
 | `/etc/udev/rules.d/51-lgimu.rules` | udev-правила (IMU evdev, hidraw, uinput) |
 | `/etc/modprobe.d/lg-magic.conf` | параметры модуля (записывает мастер) |
 | `/etc/lg-magic/config.toml` | системный конфиг CLI (conffile) |

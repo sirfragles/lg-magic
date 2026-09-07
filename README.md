@@ -140,13 +140,13 @@ Download the package for your distro from the latest
 
 ```bash
 # Ubuntu / Debian
-sudo apt install ./lg-magic-dkms_2.0-1_amd64.deb
+sudo apt install ./lg-magic-dkms_2.0.1-1_amd64.deb
 
 # Fedora
-sudo dnf install ./lg-magic-2.0-1.fc42.x86_64.rpm
+sudo dnf install ./lg-magic-2.0.1-1.fc42.x86_64.rpm
 
 # Arch
-sudo pacman -U ./lg-magic-2.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./lg-magic-2.0.1-1-x86_64.pkg.tar.zst
 ```
 
 The packages install `/usr/bin/lg-magic`, `/usr/libexec/lg-magicd`
@@ -168,12 +168,12 @@ sudo modprobe lg_magic
 ### 3. Manual DKMS install
 
 ```bash
-sudo mkdir -p /usr/src/lg-magic-2.0
-sudo cp Makefile dkms.conf COPYING /usr/src/lg-magic-2.0/
-sudo cp -r kernel include /usr/src/lg-magic-2.0/
-sudo dkms add -m lg-magic -v 2.0
-sudo dkms build -m lg-magic -v 2.0
-sudo dkms install -m lg-magic -v 2.0
+sudo mkdir -p /usr/src/lg-magic-2.0.1
+sudo cp Makefile dkms.conf COPYING /usr/src/lg-magic-2.0.1/
+sudo cp -r kernel include /usr/src/lg-magic-2.0.1/
+sudo dkms add -m lg-magic -v 2.0.1
+sudo dkms build -m lg-magic -v 2.0.1
+sudo dkms install -m lg-magic -v 2.0.1
 # DKMS builds the module only — install the tools separately:
 make tools && sudo make install
 ```
@@ -380,7 +380,7 @@ setup.
 | `/usr/share/polkit-1/actions/org.lgmagic.policy` | the two polkit actions |
 | `/usr/share/dbus-1/system.d/org.lgmagic.conf` | D-Bus policy for the daemon |
 | `/lib/modules/$(uname -r)/kernel/drivers/input/misc/lg_magic.ko` | the module (via DKMS) |
-| `/usr/src/lg-magic-2.0/` | DKMS source tree |
+| `/usr/src/lg-magic-2.0.1/` | DKMS source tree |
 | `/etc/udev/rules.d/51-lgimu.rules` | udev rules (IMU evdev, hidraw, uinput) |
 | `/etc/modprobe.d/lg-magic.conf` | module parameters (written by the wizard) |
 | `/etc/lg-magic/config.toml` | system-wide CLI config (conffile) |

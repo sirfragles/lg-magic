@@ -5,7 +5,7 @@
 # not enabled on install - the wizard does `systemctl enable --now`.
 
 Name:           lg-magic
-Version:        2.0
+Version:        2.0.1
 Release:        1%{?dist}
 Summary:        LG Magic Remote MR20 driver, daemon and tools
 License:        GPL-2.0-or-later
@@ -89,6 +89,14 @@ fi
 %{_prefix}/src/lg-magic-%{version}/dkms.conf
 
 %changelog
+* Mon Sep 07 2026 Ilya Chelyadin <sirfragles@users.noreply.github.com> - 2.0.1-1
+- Per-remote virtual keyboard/mouse pairs named after the device
+  identity; held keys are released on a live remap (no stuck keys);
+  single calibration source per mode (daemon: /var/lib/lg-magic, no
+  firmware blob); device identity validation on the bus; ApiVersion
+  property; O_EXCL state writes; IMU udev rule restricted to the LG
+  vendor/product.
+
 * Sun Sep 06 2026 Ilya Chelyadin <sirfragles@users.noreply.github.com> - 2.0-1
 - v2.0: system daemon (lg-magicd) with full input takeover, sd-bus
   interface and polkit-gated writes; raw_only=1 kernel default;
