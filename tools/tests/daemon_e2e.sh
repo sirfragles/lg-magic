@@ -412,11 +412,18 @@ expect_emit "new calibration" "$OUTM" --imu "$IMU" --gyro 0,0,100 \
 # 8. Standalone `lg-magic imu` in parallel (IMU not grabbed)         #
 # ------------------------------------------------------------------ #
 
+# The CSV is written when the CLI exits, so end it explicitly:
+# two samples, then SIGINT + wait make the file state deterministic
+# (no reliance on --duration timing on a quiet device).
 ( "$BIN" imu --csv "$TMP/csv.out" --device "$IMU" --duration 0.4 \
 	> "$TMP/imu.out" 2>&1 ) &
-sleep 0.1
+imu_pid=$!
+sleep 0.1	# let the CLI open the evdev node before the samples
 "$FAKE" emit --imu "$IMU" --gyro 1,2,100
-sleep 0.5
+"$FAKE" emit --imu "$IMU" --gyro 1,2,100
+kill -INT "$imu_pid" 2>/dev/null || true
+wait "$imu_pid" 2>/dev/null || \
+	fail "standalone imu command failed: $(cat "$TMP/imu.out")"
 [ -s "$TMP/csv.out" ] || fail "standalone imu: no CSV data: $(cat "$TMP/imu.out")"
 grep -q "100" "$TMP/csv.out" || fail "standalone imu: raw gyro not in CSV"
 echo "OK standalone imu"
