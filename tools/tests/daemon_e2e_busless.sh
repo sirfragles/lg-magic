@@ -72,6 +72,36 @@ find_node()
 	return 1
 }
 
+# like find_node, but matches by NAME PREFIX - the daemon's virtual
+# devices carry the identity ("lg-magicd keyboard unknown"), while the
+# fake devices need the exact match (a prefix would collide
+# "LG Magic Remote" with "LG Magic Remote IMU")
+find_node_prefix()
+{
+	prefix=$1
+	for input in /sys/class/input/input*; do
+		[ -f "$input/name" ] || continue
+		name=$(cat "$input/name" 2>/dev/null)
+		case "$name" in
+		"$prefix"*) ;;
+		*) continue ;;
+		esac
+		for ev in "$input"/event*; do
+			[ -f "$ev/dev" ] || continue
+			dev=$(cat "$ev/dev")
+			node=/dev/input/$(basename "$ev")
+			if [ ! -e "$node" ]; then
+				mkdir -p /dev/input
+				mknod "$node" c "${dev%%:*}" "${dev##*:}" \
+					2>/dev/null || continue
+			fi
+			echo "$node"
+			return 0
+		done
+	done
+	return 1
+}
+
 wait_for()
 {
 	label=$1; want=$2; file=$3
@@ -126,8 +156,8 @@ DAEMON_PID=$!
 wait_for "daemon startup" "virtual devices ready" "$TMP/daemon.log"
 wait_for "daemon takeover" "remote unknown: keyboard" "$TMP/daemon.log"
 
-OUTK=$(find_node "lg-magicd keyboard")
-OUTM=$(find_node "lg-magicd mouse")
+OUTK=$(find_node_prefix "lg-magicd keyboard")
+OUTM=$(find_node_prefix "lg-magicd mouse")
 [ -n "$OUTK" ] || fail "daemon: 'lg-magicd keyboard' output node not found"
 [ -n "$OUTM" ] || fail "daemon: 'lg-magicd mouse' output node not found"
 echo "daemon: outk=$OUTK outm=$OUTM"
@@ -170,16 +200,15 @@ echo "OK airmouse"
 # 4. Standalone `lg-magic imu` works in parallel (IMU not grabbed)    #
 # ------------------------------------------------------------------ #
 
+# The CSV is written when the CLI exits, so end it explicitly:
+# two samples, then SIGINT + wait make the file state deterministic
+# (no reliance on --duration timing on a quiet device).
 ( "$BIN" imu --csv "$TMP/csv.out" --device "$IMU" --duration 0.4 \
 	> "$TMP/imu.out" 2>&1 ) &
 imu_pid=$!
-sleep 0.1
+sleep 0.1	# let the CLI open the evdev node before the samples
 "$FAKE" emit --imu "$IMU" --gyro 1,2,100
-sleep 0.1
 "$FAKE" emit --imu "$IMU" --gyro 1,2,100
-sleep 0.5
-# csv is written when lg-magic imu exits; make the check deterministic
-# even when no follow-up frame arrives after --duration.
 kill -INT "$imu_pid" 2>/dev/null || true
 wait "$imu_pid" 2>/dev/null || \
 	fail "standalone imu command failed: $(cat "$TMP/imu.out")"
@@ -223,6 +252,64 @@ sleep 1.3
 grep -q "REL_WHEEL 4$" "$TMP/w5.out" || fail "scroll: expected 'REL_WHEEL 4', got: $(cat "$TMP/w5.out")"
 grep -q "REL_WHEEL_HI_RES 480$" "$TMP/w5.out" || fail "scroll: expected 'REL_WHEEL_HI_RES 480', got: $(cat "$TMP/w5.out")"
 echo "OK scroll"
+
+# 5c. held key across a SIGHUP remap: the old virtual key must not stick
+# Press KEY_UP (maps to KEY_VOLUMEUP), remap it to KEY_HOME via devices.d
+# + SIGHUP while still held, then release.  pipeline_configure must
+# release KEY_VOLUMEUP when the map changes; the held press must not
+# leak into the new map as a KEY_HOME press.
+( "$FAKE" watch "$OUTK" --ms 4000 > "$TMP/w5c.out" 2>&1 ) &
+w5c=$!
+sleep 0.1
+"$FAKE" emit --kbd "$KBD" --press KEY_UP
+sleep 0.3
+cat > "$CFG/devices.d/unknown.toml" <<'EOF'
+airmouse = true
+
+[profiles.default]
+scroll_speed = 2.0
+sensitivity = 30.0
+
+[profiles.default.button_map]
+"KEY_UP" = "KEY_HOME"
+EOF
+# the reload line from section 5 is already in the log - wait for a NEW one
+n0=$(grep -c "config reloaded" "$TMP/daemon.log" 2>/dev/null || true)
+kill -HUP "$DAEMON_PID"
+i=0
+while [ $i -lt 100 ]; do
+	[ "$(grep -c "config reloaded" "$TMP/daemon.log" 2>/dev/null || true)" -gt "$n0" ] && break
+	i=$((i + 1))
+	sleep 0.1
+done
+[ $i -lt 100 ] || fail "held key: second reload never completed: $(cat "$TMP/daemon.log")"
+sleep 0.3
+"$FAKE" emit --kbd "$KBD" --release KEY_UP
+sleep 0.7
+kill "$w5c" 2>/dev/null || true
+wait "$w5c" 2>/dev/null || true
+grep -q "KEY KEY_VOLUMEUP 1" "$TMP/w5c.out" || \
+	fail "held key: no KEY_VOLUMEUP press: $(cat "$TMP/w5c.out")"
+grep -q "KEY KEY_VOLUMEUP 0" "$TMP/w5c.out" || \
+	fail "held key: KEY_VOLUMEUP never released (stuck): $(cat "$TMP/w5c.out")"
+grep -q "KEY KEY_HOME 1" "$TMP/w5c.out" && \
+	fail "held key: the held press leaked into the new map: $(cat "$TMP/w5c.out")"
+echo "OK held key across reload"
+
+# restore the KEY_VOLUMEUP map for section 6 (reconnect re-applies
+# devices.d from disk, so the file itself is the source of truth)
+cat > "$CFG/devices.d/unknown.toml" <<'EOF'
+airmouse = true
+
+[profiles.default]
+scroll_speed = 2.0
+sensitivity = 30.0
+
+[profiles.default.button_map]
+"KEY_UP" = "KEY_VOLUMEUP"
+EOF
+kill -HUP "$DAEMON_PID"
+sleep 0.5
 
 # ------------------------------------------------------------------ #
 # 6. Reconnect: kill the fake, restart it, the daemon re-adds it      #

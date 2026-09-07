@@ -2,9 +2,10 @@
 /*
  * uinput.h - virtual input devices via /dev/uinput (Linux only).
  *
- * The v2 daemon creates exactly two devices up front:
- *   - "lg-magicd keyboard": the full EV_KEY set + REL_WHEEL etc.,
- *   - "lg-magicd mouse":    REL_X/REL_Y/REL_WHEEL_HI_RES + mouse buttons.
+ * The v2 daemon creates one pair per discovered remote, named after
+ * its identity:
+ *   - "lg-magicd keyboard <MAC>": the full EV_KEY set + REL_WHEEL etc.,
+ *   - "lg-magicd mouse <MAC>":    REL_X/REL_Y/REL_WHEEL_HI_RES + buttons.
  * The v1 `lg-magic imu --mouse` behaviour is kept bit-for-bit through
  * the uinput_open()/uinput_move() wrappers (same name, ids and event
  * set as v1).

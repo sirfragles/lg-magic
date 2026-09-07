@@ -11,7 +11,8 @@
  *         4. accelerometer calibration (recording + Levenberg-Marquardt)
  *         5. gyroscope calibration (recording + mean bias)
  *         6. calibration JSON (gyro scale / alpha / mouse_k questions)
- *         7. firmware blob to /lib/firmware (per-MAC + generic fallback)
+ *         7. firmware blob to /lib/firmware - LEGACY ONLY (raw_only=0;
+ *            skipped in daemon mode: one calibration source per mode)
  *         8. per-device state (/var/lib/lg-magic/<MAC>/calibration.json,
  *            /etc/lg-magic/devices.d/<MAC>.toml) + daemon Reload()
  *         9. module reload + dmesg verification
@@ -407,10 +408,16 @@ static double accel_spread(const struct imu_sample *s, long n)
 	return maxnorm > 1.0 ? best / maxnorm : 0.0;
 }
 
-static int step_accel_calib(struct evdev_imu *dev, struct calib *c)
+static int step_accel_calib(struct evdev_imu *dev, struct calib *c,
+			    const char *rec_dir)
 {
+	/* rec_dir is bounded by STATE_PATH_MAX (the caller builds it from
+	 * calib_path); the +32 covers "/calib_accel.csv". */
+	char csv_path[STATE_PATH_MAX + 32];
 	char err[256];
 	int attempt;
+
+	snprintf(csv_path, sizeof(csv_path), "%s/calib_accel.csv", rec_dir);
 
 	printf("\n=== Step 4: accelerometer calibration ===\n");
 	printf("Slowly rotate the remote so that each axis points up and down\n"
@@ -438,10 +445,8 @@ static int step_accel_calib(struct evdev_imu *dev, struct calib *c)
 				return -1;
 			continue;
 		}
-		if (csv_write("/etc/lg-magic/calib_accel.csv", s, (size_t)n,
-			      err, sizeof(err)) == 0)
-			printf("Saved the recording to "
-			       "/etc/lg-magic/calib_accel.csv\n");
+		if (csv_write(csv_path, s, (size_t)n, err, sizeof(err)) == 0)
+			printf("Saved the recording to %s\n", csv_path);
 		a = malloc((size_t)n * sizeof(*a));
 		if (!a) {
 			free(s);
@@ -470,14 +475,17 @@ static int step_accel_calib(struct evdev_imu *dev, struct calib *c)
 	return 0;
 }
 
-static int step_gyro_calib(struct evdev_imu *dev, struct calib *c)
+static int step_gyro_calib(struct evdev_imu *dev, struct calib *c,
+			   const char *rec_dir)
 {
 	struct imu_sample *s = NULL;
+	char csv_path[STATE_PATH_MAX + 32];
 	char err[256];
 	double std[3];
 	long n, i;
 	int j;
 
+	snprintf(csv_path, sizeof(csv_path), "%s/calib_gyro.csv", rec_dir);
 	printf("\n=== Step 5: gyroscope calibration ===\n");
 	printf("Lay the remote down on a flat surface and do not touch it.\n");
 	ask_yn("Start the 10 s recording", 1);
@@ -494,9 +502,8 @@ static int step_gyro_calib(struct evdev_imu *dev, struct calib *c)
 		free(s);
 		return -1;
 	}
-	if (csv_write("/etc/lg-magic/calib_gyro.csv", s, (size_t)n, err,
-		      sizeof(err)) == 0)
-		printf("Saved the recording to /etc/lg-magic/calib_gyro.csv\n");
+	if (csv_write(csv_path, s, (size_t)n, err, sizeof(err)) == 0)
+		printf("Saved the recording to %s\n", csv_path);
 	for (j = 0; j < 3; j++) {
 		c->gyro_bias[j] = 0.0;
 		for (i = 0; i < n; i++)
@@ -611,6 +618,52 @@ static int step_blob(const struct calib *c, double alpha, double mouse_k,
 /* Step 8: per-device state (daemon)                                   */
 /* ------------------------------------------------------------------ */
 
+/* The parent directory of the calibration path (the recordings are
+ * written next to the authoritative file: /var/lib/lg-magic/<MAC>/ in
+ * daemon mode, /etc/lg-magic/ in kernel mode - /etc must not hold
+ * calibration data in daemon mode). */
+static void dir_of(const char *path, char *out, size_t outsz)
+{
+	const char *slash = strrchr(path, '/');
+	size_t n;
+
+	if (!slash) {
+		snprintf(out, outsz, ".");
+		return;
+	}
+	if (slash == path) {
+		snprintf(out, outsz, "/");
+		return;
+	}
+	n = (size_t)(slash - path);
+	if (n >= outsz)
+		n = outsz - 1;
+	memcpy(out, path, n);
+	out[n] = '\0';
+}
+
+/* mkdir -p.  The wizard only ever creates under its own roots
+ * (/var/lib/lg-magic/..., /etc/lg-magic) - a few components deep. */
+static int mkdir_p(const char *dir)
+{
+	char path[STATE_PATH_MAX], *p;
+
+	snprintf(path, sizeof(path), "%s", dir);
+	for (p = path + 1; *p; p++) {
+		if (*p != '/')
+			continue;
+		*p = '\0';
+		if (mkdir(path, 0755) < 0 && errno != EEXIST) {
+			*p = '/';
+			return -1;
+		}
+		*p = '/';
+	}
+	if (mkdir(path, 0755) < 0 && errno != EEXIST)
+		return -1;
+	return 0;
+}
+
 /* The wizard runs as root and writes the daemon state files directly -
  * polkit gates unprivileged writes; sudo has already authenticated.
  * `calib_path`/`toml_path` are built by the caller (an empty toml_path
@@ -622,20 +675,20 @@ static int step_daemon_state(const struct calib *c, int daemon_mode,
 	char *slash;
 
 	printf("\n=== Step 8: daemon state ===\n");
-	/* mkdir -p the calibration directory (the <MAC> dir and the state
-	 * dir above it; the latter is also created by tmpfiles, this keeps
-	 * the wizard self-sufficient). */
+	/* mkdir -p the calibration directory (the <MAC>/"unknown" dir and
+	 * the state dir above it; the latter is also created by tmpfiles,
+	 * this keeps the wizard self-sufficient). */
+	if (mkdir(STATE_DIR, 0755) < 0 && errno != EEXIST) {
+		fprintf(stderr, "lg-magic: cannot create %s: %s\n", STATE_DIR,
+			strerror(errno));
+		return -1;
+	}
 	snprintf(dir, sizeof(dir), "%s", calib_path);
 	slash = strrchr(dir, '/');
 	if (slash)
 		*slash = '\0';
 	if (mkdir(dir, 0755) < 0 && errno != EEXIST) {
 		fprintf(stderr, "lg-magic: cannot create %s: %s\n", dir,
-			strerror(errno));
-		return -1;
-	}
-	if (mkdir(STATE_DIR, 0755) < 0 && errno != EEXIST) {
-		fprintf(stderr, "lg-magic: cannot create %s: %s\n", STATE_DIR,
 			strerror(errno));
 		return -1;
 	}
@@ -907,19 +960,22 @@ static void step_save_user_config(double alpha, double mouse_k,
 /* Step 12: summary                                                    */
 /* ------------------------------------------------------------------ */
 
-static void step_summary(int daemon_mode)
+static void step_summary(int daemon_mode, const char *calib_path)
 {
+	char rec_dir[STATE_PATH_MAX];
+
+	dir_of(calib_path, rec_dir, sizeof(rec_dir));
 	printf("\n=== Step 12: summary ===\n");
 	printf("What was done:\n");
 	printf("  - /etc/modprobe.d/lg-magic.conf: %s\n",
 	       daemon_mode ? "raw_only=1 imu_evdev=1"
 			   : "raw_only=0 airmouse=1 imu_evdev=1");
-	printf("  - calibration (accel + gyro) in /var/lib/lg-magic/ (or %s)\n",
-	       CALIB_JSON);
+	printf("  - calibration (accel + gyro) in %s\n", calib_path);
 	printf("  - %s/calib_accel.csv, calib_gyro.csv (recordings, for "
-	       "'lg-magic calibrate')\n", CALIB_DIR);
-	printf("  - %s/%s* (per-device + generic kernel blob)\n", FW_DIR,
-	       "lg_magic_calib");
+	       "'lg-magic calibrate')\n", rec_dir);
+	if (!daemon_mode)
+		printf("  - %s/%s* (per-device + generic kernel blob)\n",
+		       FW_DIR, "lg_magic_calib");
 	printf("  - user configuration (~/.config/lg-magic/config.toml)\n");
 	printf("\nUsage:\n");
 	if (daemon_mode) {
@@ -961,6 +1017,7 @@ int cmd_setup(int argc, char **argv)
 	double alpha, mouse_k;
 	char hidraw_path[256], uniq[64], err[256];
 	char calib_path[STATE_PATH_MAX], toml_path[STATE_PATH_MAX];
+	char rec_dir[STATE_PATH_MAX];
 	int daemon_mode, i;
 
 	for (i = 1; i < argc; i++) {
@@ -1014,10 +1071,14 @@ int cmd_setup(int argc, char **argv)
 	if (hidraw_get_uniq(hidraw_path, uniq, sizeof(uniq)) == 0 && uniq[0])
 		printf("Device MAC: %s\n", uniq);
 
-	/* The daemon state paths: per-MAC under /var/lib/lg-magic (the
-	 * daemon's default calib path) when the uniq is a MAC, the global
-	 * v1 path otherwise. toml_path stays empty without a MAC - there
-	 * is no per-device entry then. */
+	/* One calibration source per mode.  Daemon mode: the ONLY
+	 * authoritative file is /var/lib/lg-magic/<MAC>/calibration.json
+	 * (the daemon's default path); without a MAC the daemon resolves
+	 * the "unknown" identity under the state dir, so the wizard
+	 * writes exactly there.  The firmware blob is legacy-only
+	 * (raw_only=0).  Kernel mode keeps the v1 layout: the blob plus
+	 * /etc/lg-magic/calib.json.  /etc holds policy and profiles, not
+	 * calibration data. */
 	if (uniq[0] && strlen(uniq) == 17) {
 		char mac[18], state_dir[64];
 
@@ -1030,21 +1091,39 @@ int cmd_setup(int argc, char **argv)
 			 DEVICES_D_DIR, mac);
 	} else {
 		if (uniq[0])
-			printf("The uniq string ('%s') is not a MAC - using the "
-			       "global calibration path.\n", uniq);
-		snprintf(calib_path, sizeof(calib_path), "%s", CALIB_JSON);
-		toml_path[0] = '\0';
+			printf("The uniq string ('%s') is not a MAC.\n", uniq);
+		if (daemon_mode) {
+			snprintf(calib_path, sizeof(calib_path),
+				 "%s/unknown/calibration.json", STATE_DIR);
+			/* no MAC -> no per-device entry; the daemon picks
+			 * the same file up for the "unknown" identity */
+			toml_path[0] = '\0';
+			printf("Daemon mode without a MAC: using %s\n",
+			       calib_path);
+		} else {
+			snprintf(calib_path, sizeof(calib_path), "%s",
+				 CALIB_JSON);
+			toml_path[0] = '\0';
+		}
+	}
+
+	/* The recordings live next to the authoritative file. */
+	dir_of(calib_path, rec_dir, sizeof(rec_dir));
+	if (mkdir_p(rec_dir) < 0) {
+		fprintf(stderr, "lg-magic: cannot create %s: %s\n",
+			rec_dir, strerror(errno));
+		return 1;
 	}
 
 	calib_init_identity(&c);
-	if (step_accel_calib(&dev, &c) < 0)
+	if (step_accel_calib(&dev, &c, rec_dir) < 0)
 		return 1;
 	if (g_stop) {
 		evdev_close(&dev);
 		fprintf(stderr, "Interrupted.\n");
 		return 1;
 	}
-	if (step_gyro_calib(&dev, &c) < 0) {
+	if (step_gyro_calib(&dev, &c, rec_dir) < 0) {
 		evdev_close(&dev);
 		return 1;
 	}
@@ -1058,7 +1137,15 @@ int cmd_setup(int argc, char **argv)
 	mouse_k = g_cfg->mouse_k;
 	ask_tuning(&c, &alpha, &mouse_k);
 
-	if (step_blob(&c, alpha, mouse_k, uniq) < 0) {
+	/* The firmware blob is for the legacy kernel airmouse only -
+	 * daemon mode calibrates from the JSON and must not write one
+	 * (one calibration source per mode). */
+	if (daemon_mode) {
+		printf("\n=== Step 7: firmware blob (skipped) ===\n"
+		       "Daemon mode: the kernel airmouse is off, so the "
+		       "blob is not written; the calibration JSON is the "
+		       "single source.\n");
+	} else if (step_blob(&c, alpha, mouse_k, uniq) < 0) {
 		evdev_close(&dev);
 		return 1;
 	}
@@ -1069,7 +1156,7 @@ int cmd_setup(int argc, char **argv)
 	step_reload_verify();
 	step_mouse_test(&dev, &c, daemon_mode);
 	step_save_user_config(alpha, mouse_k, calib_path);
-	step_summary(daemon_mode);
+	step_summary(daemon_mode, calib_path);
 	evdev_close(&dev);
 	return 0;
 }

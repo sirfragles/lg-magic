@@ -99,6 +99,36 @@ find_node()
 	return 1
 }
 
+# like find_node, but matches by NAME PREFIX - the daemon's virtual
+# devices carry the identity ("lg-magicd keyboard unknown"), while the
+# fake devices need the exact match (a prefix would collide
+# "LG Magic Remote" with "LG Magic Remote IMU")
+find_node_prefix()
+{
+	prefix=$1
+	for input in /sys/class/input/input*; do
+		[ -f "$input/name" ] || continue
+		name=$(cat "$input/name" 2>/dev/null)
+		case "$name" in
+		"$prefix"*) ;;
+		*) continue ;;
+		esac
+		for ev in "$input"/event*; do
+			[ -f "$ev/dev" ] || continue
+			dev=$(cat "$ev/dev")
+			node=/dev/input/$(basename "$ev")
+			if [ ! -e "$node" ]; then
+				mkdir -p /dev/input
+				mknod "$node" c "${dev%%:*}" "${dev##*:}" \
+					2>/dev/null || continue
+			fi
+			echo "$node"
+			return 0
+		done
+	done
+	return 1
+}
+
 wait_for()
 {
 	label=$1; want=$2; file=$3
@@ -224,8 +254,8 @@ wait_for "daemon startup" "virtual devices ready" "$TMP/daemon.log"
 wait_for "daemon bus" "bus name org.lgmagic acquired" "$TMP/daemon.log"
 wait_for "daemon takeover" "remote unknown: keyboard" "$TMP/daemon.log"
 
-OUTK=$(find_node "lg-magicd keyboard")
-OUTM=$(find_node "lg-magicd mouse")
+OUTK=$(find_node_prefix "lg-magicd keyboard")
+OUTM=$(find_node_prefix "lg-magicd mouse")
 [ -n "$OUTK" ] || fail "'lg-magicd keyboard' output node not found"
 [ -n "$OUTM" ] || fail "'lg-magicd mouse' output node not found"
 echo "daemon: outk=$OUTK outm=$OUTM"
@@ -326,6 +356,40 @@ expect_emit "default map again" "$OUTK" --kbd "$KBD" --key KEY_UP \
 	"KEY KEY_VOLUMEUP 1" 1200
 
 # ------------------------------------------------------------------ #
+# 4b. held key across a remap: the old virtual key must not stick     #
+# ------------------------------------------------------------------ #
+# Press KEY_UP (current map: KEY_VOLUMEUP), remap it to KEY_HOME while
+# still held, then release.  The daemon must release KEY_VOLUMEUP when
+# the map changes (pipeline_configure drops every held key), and the
+# held press must not leak into the new map as a KEY_HOME press.
+( "$FAKE" watch "$OUTK" --ms 4000 > "$TMP/wheld.out" 2>&1 ) &
+wheld=$!
+sleep 0.1
+"$FAKE" emit --kbd "$KBD" --press KEY_UP
+sleep 0.3
+"$BIN" button map unknown KEY_UP KEY_HOME || fail "button map mid-press"
+sleep 0.3
+"$FAKE" emit --kbd "$KBD" --release KEY_UP
+sleep 0.7
+kill "$wheld" 2>/dev/null || true
+wait "$wheld" 2>/dev/null || true
+grep -q "KEY KEY_VOLUMEUP 1" "$TMP/wheld.out" || \
+	fail "held key: no KEY_VOLUMEUP press: $(cat "$TMP/wheld.out")"
+grep -q "KEY KEY_VOLUMEUP 0" "$TMP/wheld.out" || \
+	fail "held key: KEY_VOLUMEUP never released (stuck): $(cat "$TMP/wheld.out")"
+grep -q "KEY KEY_HOME 1" "$TMP/wheld.out" && \
+	fail "held key: the held press leaked into the new map: $(cat "$TMP/wheld.out")"
+expect_emit "remap after release" "$OUTK" --kbd "$KBD" --key KEY_UP \
+	"KEY KEY_HOME 1" 1200
+# restore KEY_UP -> KEY_VOLUMEUP: section 6's button reset must still
+# find a map to clear (a reset on an already-empty map proves nothing)
+"$BIN" button map unknown KEY_UP KEY_VOLUMEUP || \
+	fail "button map restore after held-key test"
+expect_emit "restore map after held-key" "$OUTK" --kbd "$KBD" --key KEY_UP \
+	"KEY KEY_VOLUMEUP 1" 1200
+echo "OK held key across remap"
+
+# ------------------------------------------------------------------ #
 # 5. scroll speed / sensitivity / reset                              #
 # ------------------------------------------------------------------ #
 
@@ -412,16 +476,15 @@ expect_emit "new calibration" "$OUTM" --imu "$IMU" --gyro 0,0,100 \
 # 8. Standalone `lg-magic imu` in parallel (IMU not grabbed)         #
 # ------------------------------------------------------------------ #
 
+# The CSV is written when the CLI exits, so end it explicitly:
+# two samples, then SIGINT + wait make the file state deterministic
+# (no reliance on --duration timing on a quiet device).
 ( "$BIN" imu --csv "$TMP/csv.out" --device "$IMU" --duration 0.4 \
 	> "$TMP/imu.out" 2>&1 ) &
 imu_pid=$!
-sleep 0.1
+sleep 0.1	# let the CLI open the evdev node before the samples
 "$FAKE" emit --imu "$IMU" --gyro 1,2,100
-sleep 0.1
 "$FAKE" emit --imu "$IMU" --gyro 1,2,100
-sleep 0.5
-# csv is written when lg-magic imu exits; make the check deterministic
-# even when no follow-up frame arrives after --duration.
 kill -INT "$imu_pid" 2>/dev/null || true
 wait "$imu_pid" 2>/dev/null || \
 	fail "standalone imu command failed: $(cat "$TMP/imu.out")"

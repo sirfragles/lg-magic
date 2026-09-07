@@ -164,7 +164,9 @@ static int mkdir_p(const char *dir, char *err, size_t errsz)
 	return 0;
 }
 
-/* Atomic write: tmp + fsync + rename. */
+/* Atomic write: tmp + fsync + rename.  O_EXCL refuses to follow a
+ * symlink planted at <path>.tmp - the state dir is daemon-owned, but
+ * the write must never go through a link (symlink protection). */
 static int atomic_write_file(const char *path, const char *text,
 			     char *err, size_t errsz)
 {
@@ -176,7 +178,14 @@ static int atomic_write_file(const char *path, const char *text,
 		snprintf(err, errsz, "state file path too long");
 		return -1;
 	}
-	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_TRUNC, 0644);
+	if (fd < 0 && errno == EEXIST) {
+		/* a crashed write left a stale .tmp - remove and retry
+		 * (unlink removes a planted symlink itself, not its target) */
+		if (unlink(tmp) == 0)
+			fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_TRUNC,
+				  0644);
+	}
 	if (fd < 0) {
 		snprintf(err, errsz, "cannot open %s: %s", tmp,
 			 strerror(errno));

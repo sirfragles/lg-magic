@@ -188,28 +188,38 @@ Checks that run on a Linux host with the full binary:
 `tools/tests/fake_devices.c` creates a uinput keyboard named
 `LG Magic Remote` (vendor/product 0x000f:3412) and a uinput ABS device
 named `LG Magic Remote IMU` - the exact devices the daemon pairs and
-grabs. Two drivers run the assertions:
+grabs. Each remote gets its **own** virtual pair named after its
+identity (`lg-magicd keyboard <identity>` / `lg-magicd mouse
+<identity>`; the fake remote has no BT MAC, so its identity is
+`unknown`). Two drivers run the assertions:
 
 - `tools/tests/daemon_e2e.sh` - the **full bus + polkit e2e**. Needs root,
   `/dev/uinput`, `dbus-daemon` and `polkitd`; starts a throwaway system
   bus, installs the policy files, runs `lg-magicd` and asserts:
   - `lg-magic device list` / `device status` render as root **and as
-    `nobody`** - read-only methods stay polkit-free for everyone;
+    `nobody`** - read-only methods stay polkit-free for everyone; the
+    `ApiVersion` property reads `"2.0"` and a bogus identity is rejected
+    with `org.lgmagic.Error.InvalidArguments`;
   - `button map` as root maps `KEY_UP -> KEY_VOLUMEUP` and the fake
-    remote's KEY_UP then arrives at `lg-magicd keyboard` as KEY_VOLUMEUP
-    **immediately, without a daemon restart**; the same call as `nobody`
-    is **denied** (polkit `org.lgmagic.modify-input`), and so is
-    `profile set` as `nobody` (`org.lgmagic.profile-set`);
+    remote's KEY_UP then arrives at `lg-magicd keyboard unknown` as
+    KEY_VOLUMEUP **immediately, without a daemon restart**; the same
+    call as `nobody` is **denied** (polkit
+    `org.lgmagic.modify-input`), and so is `profile set` as `nobody`
+    (`org.lgmagic.profile-set`);
+  - **held key across a remap**: KEY_UP is pressed (maps to
+    KEY_VOLUMEUP), remapped to KEY_HOME while still held, then released -
+    the daemon must release KEY_VOLUMEUP when the map changes (no stuck
+    key) and the held press must not leak into the new map;
   - `profile set` updates `/var/lib/lg-magic/state.toml` and changes the
     active map/scroll through the daemon;
   - scroll: a wheel byte of +2 at `scroll_speed 2.0` yields REL_WHEEL 4
-    (+480 on REL_WHEEL_HI_RES) on `lg-magicd mouse`;
+    (+480 on REL_WHEEL_HI_RES) on `lg-magicd mouse unknown`;
   - calibration: a calib JSON in /var/lib + `Reload()` takes effect
     (airmouse behaviour changes); a **broken calib JSON is rejected** -
     the daemon logs the failure, keeps the previous calibration and
     stays alive;
-  - airmouse: nonzero gyro moves `lg-magicd mouse` with the v1 signs;
-    at rest there is no motion;
+  - airmouse: nonzero gyro moves `lg-magicd mouse unknown` with the v1
+    signs; at rest there is no motion;
   - reconnect: destroying and recreating the fake device is rediscovered;
   - grab release: `kill -9` on the daemon releases EVIOCGRAB - raw
     events flow to an ordinary reader again; the same check repeats after
@@ -276,7 +286,12 @@ sudo lg-magic setup          # wizard: mode choice, configure, calibrate, instal
 1. **Setup and upgrade.** `setup` finds the remote and both input
    devices and offers the mode choice (daemon = v2 default `raw_only=1
    imu_evdev=1`, kernel airmouse = v1 behaviour `raw_only=0 airmouse=1`).
-   The v1 flows survive either mode.
+   The v1 flows survive either mode. **One calibration source per mode:**
+   in daemon mode the wizard writes only
+   `/var/lib/lg-magic/<MAC>/calibration.json` (no firmware blob, no
+   `/etc/lg-magic/calib.json`); in kernel airmouse mode it writes the
+   blob to `/lib/firmware/` as in v1. No calibration data may land in
+   two places.
 2. **Buttons decode identically to v1.** Every physical key arrives
    with the same keycodes (the static `lg_btn_map` decode is
    mode-independent) - check with `evtest` or `lg-magic analyze`.
@@ -301,11 +316,17 @@ sudo lg-magic setup          # wizard: mode choice, configure, calibrate, instal
 
 6. **Takeover order.** The wizard enables `lg-magicd`; the daemon
    creates the uinput mouse and keyboard **before** taking EVIOCGRAB.
-   Restarting the daemon must never leave the remote dead.
+   Restarting the daemon must never leave the remote dead. Each remote
+   owns one pair named after its identity (`lg-magicd keyboard <MAC>` /
+   `lg-magicd mouse <MAC>`) - two remotes must never share or mix
+   devices.
 7. **Airmouse through the daemon.** The pointer tracks hand motion with
    the v1 signs/scale; gyro rest drift is small; buttons keep clicking.
 8. **Immediate profile / map.** `profile set` and `button map` change
-   behaviour at once - **without restarting the daemon**.
+   behaviour at once - **without restarting the daemon**. Hold a key
+   and remap it mid-press: the old virtual key must be released the
+   moment the map changes (no stuck key), and the held press must not
+   appear under the new mapping.
 9. **Scroll speed / sensitivity.** `scroll speed` and `sensitivity`
    changes are applied immediately too.
 10. **Fallback without the daemon (the key safety condition).** With

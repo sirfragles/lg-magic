@@ -22,13 +22,20 @@
 #include "daemon_pipeline.h"
 #include "evdev.h"
 
-/* One discovered remote. */
+/* One discovered remote.  Each remote owns its own pair of virtual
+ * devices ("lg-magicd keyboard <identity>" / "lg-magicd mouse
+ * <identity>") so two remotes can never mix held-key state or
+ * profiles on a shared output; the names carry the identity (BT MAC,
+ * or "unknown" without a sysfs uniq) so desktops can tell them apart.
+ * The pair is created BEFORE the grab (plan safety order). */
 struct daemon_remote {
 	char identity[64];	/* BT MAC or "unknown" (no uniq) */
 	char kbd_path[256];
 	char imu_path[256];	/* "" when the IMU is absent */
 	struct evdev_imu kbd;	/* open, grabbed (best effort) */
 	struct evdev_imu imu;	/* open, NOT grabbed; fd -1 when absent */
+	int kbd_uinput;		/* this remote's virtual keyboard; -1 */
+	int mouse_uinput;	/* this remote's virtual mouse; -1 */
 	struct device_config dc;	/* resolved per-remote config */
 	struct pipeline pl;
 };
@@ -38,6 +45,7 @@ struct daemon_devices {
 	size_t nremotes;
 	struct daemon_config *config;
 	const char *kbd_override;	/* --keyboard PATH (test mode) */
+	int no_uinput;			/* --no-uinput: skip virtual pairs */
 	int inotify_fd;
 	int inotify_wd;			/* -1 when not watching */
 	int have_rescan;		/* a debounced rescan is scheduled */
@@ -48,7 +56,7 @@ struct daemon_devices {
 
 /* Set up device discovery (inotify best effort). Returns 0 / -1. */
 int daemon_devices_init(struct daemon_devices *dd, struct daemon_config *config,
-			const char *kbd_override, int debug,
+			const char *kbd_override, int no_uinput, int debug,
 			char *err, size_t errsz);
 
 /* Full rescan: probe /dev/input, re-pair, open/grab what appeared or
@@ -57,6 +65,13 @@ int daemon_devices_init(struct daemon_devices *dd, struct daemon_config *config,
  * Returns 0 / -1. */
 int daemon_devices_rescan(struct daemon_devices *dd, char *err, size_t errsz);
 
+/* Identity check used by the scanner AND the bus: "unknown" or a
+ * 17-char BT MAC (hex, colons, any case).  Identities flow into file
+ * paths (devices.d/<identity>.toml, the state dir), so nothing else is
+ * accepted - a hostile non-MAC uniq falls back to "unknown" at scan
+ * time, a bad bus argument is InvalidArguments. */
+int daemon_identity_valid(const char *s);
+
 /* Fill pollfds (inotify + one entry per open device). Returns the
  * count; the layout matches daemon_devices_handle(). */
 int daemon_devices_pollfds(struct daemon_devices *dd, struct pollfd *fds,
@@ -64,11 +79,11 @@ int daemon_devices_pollfds(struct daemon_devices *dd, struct pollfd *fds,
 
 /* Handle one ready pollfd entry (idx from 0, same layout as
  * daemon_devices_pollfds): a device frame is pushed through the
- * pipeline and emitted on the uinput fds.  Returns 1 when a frame was
- * handled, 0 when nothing was (inotify drained, rescan scheduled), -1
- * when a device was lost (a rescan is already scheduled). */
-int daemon_devices_handle(struct daemon_devices *dd, size_t idx,
-			  int kbd_uinput, int mouse_uinput);
+ * pipeline and emitted on that remote's own uinput pair.  Returns 1
+ * when a frame was handled, 0 when nothing was (inotify drained,
+ * rescan scheduled), -1 when a device was lost (a rescan is already
+ * scheduled). */
+int daemon_devices_handle(struct daemon_devices *dd, size_t idx);
 
 /* Milliseconds to sleep before the next scheduled rescan (<= 0 = now).
  * Combines the debounced inotify rescan with the polling fallback, so

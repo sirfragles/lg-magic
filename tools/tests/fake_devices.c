@@ -10,10 +10,12 @@
  *   emit    write input_event structs straight into an evdev node
  *           (this is how the uinput driver itself delivers events):
  *             --kbd PATH --key KEY_UP     press + release
+ *             --kbd PATH --press KEY_UP   press only (held-key e2e)
+ *             --kbd PATH --release KEY_UP release only
  *             --kbd PATH --wheel N        REL_WHEEL N
  *             --imu PATH --gyro X,Y,Z     ABS_RX/RY/RZ + MSC counter
  *   watch   read and print frames from an evdev node (e.g. the daemon's
- *           "lg-magicd keyboard"/"lg-magicd mouse" outputs).
+ *           per-remote "lg-magicd keyboard <identity>" outputs).
  *
  * The devices carry vendor 0x000f/product 0x3412 and the exact kernel
  * names, so the daemon's pairing (pairing_is_keyboard/_imu) sees them
@@ -52,6 +54,8 @@ static void usage(FILE *out)
 {
 	fputs("Usage: fake_devices create\n"
 	      "       fake_devices emit --kbd PATH --key NAME\n"
+	      "       fake_devices emit --kbd PATH --press NAME\n"
+	      "       fake_devices emit --kbd PATH --release NAME\n"
 	      "       fake_devices emit --kbd PATH --wheel N\n"
 	      "       fake_devices emit --imu PATH --gyro X,Y,Z\n"
 	      "       fake_devices watch PATH [--ms MS]\n", out);
@@ -279,6 +283,36 @@ static int emit_ev(int fd, __u16 type, __u16 code, int value)
 	return write(fd, &ev, sizeof(ev)) == sizeof(ev) ? 0 : -1;
 }
 
+/* Press or release only - the held-key e2e needs a key that stays down
+ * across a remap (--key emits press + release in one go). */
+static int emit_key_edge(const char *path, const char *name, int value)
+{
+	int code = keymap_name_to_code(name);
+	int fd;
+
+	if (code < 0) {
+		fprintf(stderr, "fake_devices: unknown key name '%s'\n", name);
+		return 1;
+	}
+	fd = open(path, O_WRONLY);
+	if (fd < 0) {
+		fprintf(stderr, "fake_devices: cannot open %s: %s\n", path,
+			strerror(errno));
+		return 1;
+	}
+	fprintf(stderr, "fake_devices: emit %s %s (code %d) on %s\n", name,
+		value ? "press" : "release", code, path);
+	if (emit_ev(fd, EV_KEY, (__u16)code, value) < 0 ||
+	    emit_ev(fd, EV_SYN, SYN_REPORT, 0) < 0) {
+		fprintf(stderr, "fake_devices: write to %s failed: %s\n", path,
+			strerror(errno));
+		close(fd);
+		return 1;
+	}
+	close(fd);
+	return 0;
+}
+
 static int emit_key(const char *path, const char *name)
 {
 	int code = keymap_name_to_code(name);
@@ -355,7 +389,7 @@ static int emit_gyro(const char *path, int gx, int gy, int gz)
 static int cmd_emit(int argc, char **argv)
 {
 	const char *kbd = NULL, *imu = NULL;
-	const char *key = NULL;
+	const char *key = NULL, *press = NULL, *release = NULL;
 	int wheel = 0, have_wheel = 0;
 	int gx = 0, gy = 0, gz = 0, have_gyro = 0;
 	int i;
@@ -367,6 +401,10 @@ static int cmd_emit(int argc, char **argv)
 			imu = argv[++i];
 		else if (strcmp(argv[i], "--key") == 0 && i + 1 < argc)
 			key = argv[++i];
+		else if (strcmp(argv[i], "--press") == 0 && i + 1 < argc)
+			press = argv[++i];
+		else if (strcmp(argv[i], "--release") == 0 && i + 1 < argc)
+			release = argv[++i];
 		else if (strcmp(argv[i], "--wheel") == 0 && i + 1 < argc) {
 			wheel = atoi(argv[++i]);
 			have_wheel = 1;
@@ -384,6 +422,10 @@ static int cmd_emit(int argc, char **argv)
 	}
 	if (key && kbd)
 		return emit_key(kbd, key);
+	if (press && kbd)
+		return emit_key_edge(kbd, press, 1);
+	if (release && kbd)
+		return emit_key_edge(kbd, release, 0);
 	if (have_wheel && kbd)
 		return emit_wheel(kbd, wheel);
 	if (have_gyro && imu)
