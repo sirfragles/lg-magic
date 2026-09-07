@@ -244,11 +244,14 @@ static int polkit_authorized(sd_bus_message *m, const char *action)
 		return -1;
 	}
 
+	/* details is a{ss} in the CheckAuthorization signature (the
+	 * reply carries a{sv}); a{sv} here makes the broker reject the
+	 * message - the daemon would fail closed for everyone. */
 	r = sd_bus_call_method(bus, "org.freedesktop.PolicyKit1",
 			       "/org/freedesktop/PolicyKit1/Authority",
 			       "org.freedesktop.PolicyKit1.Authority",
 			       "CheckAuthorization", &error, &reply,
-			       "(sa{sv})sa{sv}us",
+			       "(sa{sv})sa{ss}us",
 			       "unix-process", 3,
 			       "pid", "u", pid,
 			       "start-time", "t", starttime,
@@ -393,6 +396,15 @@ static int method_set_profile(sd_bus_message *m, void *userdata,
 	if (daemon_config_save_profile(dd->config, mac, profile,
 				       err, sizeof(err)) < 0)
 		return fail(m, LG_ERROR_FAILED, "%s", err);
+	/* The dc carries the active profile resolved from state.toml at
+	 * load time - reload it so the pipeline follows the new profile
+	 * immediately (no daemon restart). */
+	device_config_free(&r->dc);
+	device_config_init(&r->dc);
+	if (daemon_config_load_remote(dd->config, r->identity, &r->dc,
+				      err, sizeof(err)) < 0)
+		fprintf(stderr, "lg-magicd: %s: profile reload failed: %s\n",
+			r->identity, err);
 	remote_apply(r, dd);
 	return ok(m);
 }
