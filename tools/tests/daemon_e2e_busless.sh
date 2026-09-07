@@ -172,9 +172,17 @@ echo "OK airmouse"
 
 ( "$BIN" imu --csv "$TMP/csv.out" --device "$IMU" --duration 0.4 \
 	> "$TMP/imu.out" 2>&1 ) &
+imu_pid=$!
+sleep 0.1
+"$FAKE" emit --imu "$IMU" --gyro 1,2,100
 sleep 0.1
 "$FAKE" emit --imu "$IMU" --gyro 1,2,100
 sleep 0.5
+# csv is written when lg-magic imu exits; make the check deterministic
+# even when no follow-up frame arrives after --duration.
+kill -INT "$imu_pid" 2>/dev/null || true
+wait "$imu_pid" 2>/dev/null || \
+	fail "standalone imu command failed: $(cat "$TMP/imu.out")"
 [ -s "$TMP/csv.out" ] || fail "standalone imu: no CSV data: $(cat "$TMP/imu.out")"
 grep -q "100" "$TMP/csv.out" || fail "standalone imu: raw gyro not in CSV: $(cat "$TMP/csv.out")"
 echo "OK standalone imu"
