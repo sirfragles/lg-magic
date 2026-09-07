@@ -25,7 +25,9 @@
 #include "matrix.h"
 #include "uinput.h"
 
+#include <errno.h>
 #include <math.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -186,6 +188,42 @@ int cmd_imu(int argc, char **argv)
 		unsigned counter;
 		double dt, a_corr[3], g_corr[3];
 		int accel[3], gyro[3], rv;
+
+		/* --duration must fire even when the device goes quiet:
+		 * evdev_read_frame() blocks, so give the read a poll()
+		 * deadline instead of checking the clock only between
+		 * frames.  Without this, a single injected frame (the e2e)
+		 * is recorded in memory and the loop sits in read() until
+		 * killed - the CSV file is only written after the loop
+		 * exits, so the test would read back nothing. */
+		if (duration > 0.0) {
+			struct pollfd pfd;
+			double wait_s = duration;
+			int pr;
+
+			if (have_t0) {
+				struct timespec now;
+				double elapsed;
+
+				clock_gettime(CLOCK_MONOTONIC, &now);
+				elapsed = (now.tv_sec - t0.tv_sec) +
+					(now.tv_nsec - t0.tv_nsec) * 1e-9;
+				wait_s = duration - elapsed;
+			}
+			if (wait_s <= 0.0)
+				break;
+			pfd.fd = dev.fd;
+			pfd.events = POLLIN;
+			pr = poll(&pfd, 1, (int)(wait_s * 1000.0) + 1);
+			if (pr < 0) {
+				if (errno == EINTR && g_stop)
+					break;
+			} else if (pr == 0) {
+				/* the deadline fired, no data pending -
+				 * break even if a signal raced the timeout */
+				break;
+			}
+		}
 
 		rv = evdev_read_frame(&dev, &counter, &dt, accel, gyro,
 				      err, sizeof(err));
