@@ -418,11 +418,23 @@ static const char *code_name(__u16 type, __u16 code)
 	return "?";
 }
 
+static void print_event(const struct input_event *ev)
+{
+	if (ev->type == EV_SYN)
+		printf("---\n");
+	else
+		printf("%s %s %d\n",
+		       ev->type == EV_KEY ? "KEY" :
+		       ev->type == EV_REL ? "REL" :
+		       ev->type == EV_ABS ? "ABS" : "EV",
+		       code_name(ev->type, ev->code), ev->value);
+}
+
 static int cmd_watch(int argc, char **argv)
 {
 	const char *path = NULL;
 	long long limit_ms = 0, t0 = 0;
-	struct input_event ev;
+	struct input_event evs[16];
 	ssize_t rv;
 	int fd, i;
 
@@ -440,7 +452,12 @@ static int cmd_watch(int argc, char **argv)
 		usage(stderr);
 		return 1;
 	}
-	fd = open(path, O_RDONLY);
+	/* O_NONBLOCK: the --ms deadline must end the loop even when the
+	 * device goes quiet.  A blocking read would sit forever past the
+	 * limit, and the test's kill would throw the stdio buffer (and
+	 * the lines with it) away - the reason the very first e2e checks
+	 * read back empty. */
+	fd = open(path, O_RDONLY | O_NONBLOCK);
 	if (fd < 0) {
 		fprintf(stderr, "fake_devices: cannot open %s: %s\n", path,
 			strerror(errno));
@@ -448,31 +465,30 @@ static int cmd_watch(int argc, char **argv)
 	}
 	for (;;) {
 		struct timespec ts;
+		long long now;
 
+		rv = read(fd, evs, sizeof(evs));
+		if (rv > 0) {
+			/* A read can carry several whole events - print them
+			 * all (rv is always a multiple of sizeof(evs[0])). */
+			for (i = 0; i < rv / (ssize_t)sizeof(evs[0]); i++)
+				print_event(&evs[i]);
+			fflush(stdout);	/* survives a kill right after this */
+			continue;
+		}
+		if (rv == 0)
+			break;	/* EOF - the device was destroyed */
+		if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+			break;
 		if (limit_ms > 0) {
 			clock_gettime(CLOCK_MONOTONIC, &ts);
+			now = (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 			if (t0 == 0)
-				t0 = (long long)ts.tv_sec * 1000 +
-				     ts.tv_nsec / 1000000;
-			else if ((long long)ts.tv_sec * 1000 +
-				 ts.tv_nsec / 1000000 - t0 >= limit_ms)
+				t0 = now;
+			else if (now - t0 >= limit_ms)
 				break;
 		}
-		rv = read(fd, &ev, sizeof(ev));
-		if (rv < 0 && errno == EINTR)
-			break;
-		if (rv <= 0)
-			break;	/* EOF */
-		if (rv != sizeof(ev))
-			continue;
-		if (ev.type == EV_SYN)
-			printf("---\n");
-		else
-			printf("%s %s %d\n",
-			       ev.type == EV_KEY ? "KEY" :
-			       ev.type == EV_REL ? "REL" :
-			       ev.type == EV_ABS ? "ABS" : "EV",
-			       code_name(ev.type, ev.code), ev.value);
+		usleep(5000);
 	}
 	close(fd);
 	return 0;
