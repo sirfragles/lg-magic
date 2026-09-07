@@ -1,5 +1,8 @@
 # LG Magic Remote (MR20) — Linux Driver, Daemon and Native C Tools
 
+> **This repository is archived.** The project continues at
+> [sirfragles/lgmagic](https://github.com/sirfragles/lgmagic).
+
 **Language:** **English🇬🇧** [Русский🇷🇺](README.ru.md)
 
 ![LG Magic Remote](images/lg_magic_remote.png)

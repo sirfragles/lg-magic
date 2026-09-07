@@ -1,5 +1,8 @@
 # LG Magic Remote (MR20) — драйвер Linux, демон и нативные инструменты на C
 
+> **Этот репозиторий заархивирован.** Проект продолжается в
+> [sirfragles/lgmagic](https://github.com/sirfragles/lgmagic).
+
 **Язык:** [English🇬🇧](README.md) **Русский🇷🇺**
 
 ![LG Magic Remote](images/lg_magic_remote.png)
