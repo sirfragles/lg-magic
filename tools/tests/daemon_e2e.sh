@@ -285,8 +285,9 @@ expect_emit "startup map" "$OUTK" --kbd "$KBD" --key KEY_UP \
 # ------------------------------------------------------------------ #
 
 "$BIN" button map unknown KEY_DOWN KEY_BACK || fail "button map as root"
-grep -q '"KEY_DOWN"' "$CFG/devices.d/unknown.toml" || \
-	fail "button map: devices.d not updated"
+# the daemon's TOML writer emits bare-safe keys unquoted
+grep -q 'KEY_DOWN' "$CFG/devices.d/unknown.toml" || \
+	fail "button map: devices.d not updated: $(cat "$CFG/devices.d/unknown.toml")"
 expect_emit "mapped KEY_DOWN" "$OUTK" --kbd "$KBD" --key KEY_DOWN \
 	"KEY KEY_BACK 1" 1200
 
@@ -348,10 +349,11 @@ expect_emit "sensitivity reset" "$OUTM" --imu "$IMU" --gyro 0,0,100 \
 
 "$BIN" button reset unknown || fail "button reset"
 # only the active (default) profile is cleared - tv keeps its map
-grep -q '"KEY_UP" = "KEY_VOLUMEUP"' "$CFG/devices.d/unknown.toml" && \
+# (the daemon's TOML writer emits bare-safe keys unquoted)
+grep -q 'KEY_UP = "KEY_VOLUMEUP"' "$CFG/devices.d/unknown.toml" && \
 	fail "button reset: default profile still maps KEY_UP"
-grep -q '"KEY_UP" = "KEY_HOME"' "$CFG/devices.d/unknown.toml" || \
-	fail "button reset: the tv profile map must survive"
+grep -q 'KEY_UP = "KEY_HOME"' "$CFG/devices.d/unknown.toml" || \
+	fail "button reset: the tv profile map must survive: $(cat "$CFG/devices.d/unknown.toml")"
 "$BIN" button list unknown > "$TMP/bl2.out"
 grep -q "(no buttons mapped" "$TMP/bl2.out" || \
 	fail "button reset: button list: $(cat "$TMP/bl2.out")"
